@@ -427,3 +427,195 @@ tr:hover {
     from { transform: translateX(100%); opacity: 0; }
     to { transform: translateX(0); opacity: 1; }
 }
+/* Card and Container Text Colors - Improved Contrast */
+.stat-card h3 {
+    color: #2c3e50 !important;
+    font-weight: 700;
+    margin-bottom: 10px;
+    font-size: 1.1em;
+}
+
+.stat-card .stat-number {
+    color: #2c3e50 !important;
+    font-size: 1.8em;
+    font-weight: 800;
+    margin: 10px 0;
+    line-height: 1.2;
+}
+
+.stat-card p {
+    color: #5d6d7e !important;
+    font-size: 0.9em;
+    margin: 0;
+    font-weight: 500;
+}
+
+.merchant-card {
+    background: #ffffff !important;
+    border: 1px solid #e0e0e0 !important;
+}
+
+.merchant-card .merchant-name {
+    color: #2c3e50 !important;
+    font-weight: 700;
+    font-size: 1.1em;
+}
+
+.merchant-card .stat-item .stat-value {
+    color: #2c3e50 !important;
+    font-weight: 700;
+    font-size: 1.3em;
+}
+
+.merchant-card .stat-item .stat-label {
+    color: #5d6d7e !important;
+    font-weight: 500;
+    font-size: 0.85em;
+}
+
+.chart-title, .section-title {
+    color: #2c3e50 !important;
+    font-weight: 700;
+    margin: 20px 0 15px 0;
+    font-size: 1.4em;
+    text-shadow: none;
+}
+
+/* Fix amount overflow in cards */
+.stat-card.amount .stat-number,
+.small-amount {
+    font-size: 1.4em !important;
+    word-break: break-word;
+    overflow-wrap: break-word;
+}
+
+/* Table text contrast */
+.recent-transactions th {
+    color: #2c3e50 !important;
+    background: #f8f9fa !important;
+}
+
+.recent-transactions td {
+    color: #34495e !important;
+}
+
+/* Filter text contrast */
+.filters label {
+    color: #2c3e50 !important;
+    font-weight: 600;
+}
+
+.filter-group select, .filter-group input {
+    color: #2c3e50 !important;
+    border: 1px solid #bdc3c7 !important;
+}
+
+/* Success rate badges text contrast */
+.success-rate {
+    padding: 4px 10px;
+    border-radius: 12px;
+    font-size: 11px;
+    font-weight: bold;
+}
+
+.success-rate.high {
+    background: #d4edda !important;
+    color: #155724 !important;
+}
+
+.success-rate.medium {
+    background: #fff3cd !important;
+    color: #856404 !important;
+}
+
+.success-rate.low {
+    background: #f8d7da !important;
+    color: #721c24 !important;
+}
+
+/* Export buttons text contrast */
+.export-btn {
+    background: #5a6268 !important;
+    color: white !important;
+    border: none;
+    border-radius: 5px;
+    cursor: pointer;
+    font-size: 0.9em;
+    transition: background 0.3s;
+}
+
+.export-btn:hover {
+    background: #495057 !important;
+}
+
+/* Status colors in tables */
+.status-successful { 
+    color: #155724 !important; 
+    background: #d4edda !important;
+    padding: 4px 8px;
+    border-radius: 4px;
+    font-weight: 600;
+}
+
+.status-pending { 
+    color: #856404 !important; 
+    background: #fff3cd !important;
+    padding: 4px 8px;
+    border-radius: 4px;
+    font-weight: 600;
+}
+
+.status-failed { 
+    color: #721c24 !important; 
+    background: #f8d7da !important;
+    padding: 4px 8px;
+    border-radius: 4px;
+    font-weight: 600;
+}
+
+.status-in { 
+    color: #004085 !important; 
+    background: #cce5ff !important;
+    padding: 4px 8px;
+    border-radius: 4px;
+    font-weight: 600;
+}
+
+.status-out { 
+    color: #155724 !important; 
+    background: #d4edda !important;
+    padding: 4px 8px;
+    border-radius: 4px;
+    font-weight: 600;
+}
+
+/* Responsive text sizes */
+@media (max-width: 768px) {
+    .stat-card .stat-number {
+        font-size: 1.5em !important;
+    }
+    
+    .stat-card.amount .stat-number,
+    .small-amount {
+        font-size: 1.2em !important;
+    }
+    
+    .merchant-card .stat-item .stat-value {
+        font-size: 1.1em !important;
+    }
+}
+
+@media (max-width: 480px) {
+    .stat-card .stat-number {
+        font-size: 1.3em !important;
+    }
+    
+    .stat-card.amount .stat-number,
+    .small-amount {
+        font-size: 1.1em !important;
+    }
+    
+    .merchant-card .stat-item .stat-value {
+        font-size: 1em !important;
+    }
+}
