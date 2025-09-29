@@ -17,8 +17,8 @@ if (strtotime($filter_date_end) < strtotime($filter_date)) {
 try {
     $conn = connectDB(Config::$malpay_config);
     
-    // Build WHERE clause for filters - ONLY OUT transactions (successful completions)
-    $where_clause = "WHERE CAST(l.LogDate as DATE) BETWEEN ? AND ? AND l.LogType = 'OUT'";
+    // Build WHERE clause for filters - ONLY OUT transactions with specific MetaData
+    $where_clause = "WHERE CAST(l.LogDate as DATE) BETWEEN ? AND ? AND l.LogType = 'OUT' AND l.MetaData LIKE 'Total response time%'";
     $params = [$filter_date, $filter_date_end];
     
     if ($filter_merchant !== 'all') {
@@ -26,7 +26,7 @@ try {
         $params[] = $filter_merchant;
     }
     
-    // Get overall statistics for the filtered period - ONLY OUT transactions
+    // Get overall statistics for the filtered period - ONLY valid OUT transactions
     $stats_sql = "
         SELECT 
             COUNT(*) as total_out_logs,
@@ -40,14 +40,37 @@ try {
     $stats->execute($params);
     $stats = $stats->fetch(PDO::FETCH_ASSOC);
     
-    // Get merchant statistics - ONLY OUT transactions with amounts
+    // Get failed OUT transactions (MetaData doesn't start with "Total response time")
+    $failed_stats_sql = "
+        SELECT 
+            COUNT(*) as failed_out_logs,
+            SUM(l.Amount) as failed_amount
+        FROM MerchantLogs l
+        WHERE CAST(l.LogDate as DATE) BETWEEN ? AND ? 
+        AND l.LogType = 'OUT' 
+        AND l.MetaData NOT LIKE 'Total response time%'
+    ";
+    
+    $failed_params = [$filter_date, $filter_date_end];
+    if ($filter_merchant !== 'all') {
+        $failed_stats_sql .= " AND l.MerchantName = ?";
+        $failed_params[] = $filter_merchant;
+    }
+    
+    $failed_stats = $conn->prepare($failed_stats_sql);
+    $failed_stats->execute($failed_params);
+    $failed_stats = $failed_stats->fetch(PDO::FETCH_ASSOC);
+    
+    // Get merchant statistics - ONLY valid OUT transactions with amounts
     $merchant_stats_sql = "
         SELECT 
             l.MerchantName,
             COUNT(*) as out_count,
             SUM(l.Amount) as total_amount
         FROM MerchantLogs l
-        WHERE CAST(l.LogDate as DATE) BETWEEN ? AND ? AND l.LogType = 'OUT'
+        WHERE CAST(l.LogDate as DATE) BETWEEN ? AND ? 
+        AND l.LogType = 'OUT' 
+        AND l.MetaData LIKE 'Total response time%'
         GROUP BY l.MerchantName
         ORDER BY out_count DESC
     ";
@@ -56,6 +79,24 @@ try {
     $merchant_stats->execute([$filter_date, $filter_date_end]);
     $merchant_stats_data = $merchant_stats->fetchAll(PDO::FETCH_ASSOC);
     
+    // Get failed transactions per merchant
+    $failed_merchant_stats_sql = "
+        SELECT 
+            l.MerchantName,
+            COUNT(*) as failed_count,
+            SUM(l.Amount) as failed_amount
+        FROM MerchantLogs l
+        WHERE CAST(l.LogDate as DATE) BETWEEN ? AND ? 
+        AND l.LogType = 'OUT' 
+        AND l.MetaData NOT LIKE 'Total response time%'
+        GROUP BY l.MerchantName
+        ORDER BY failed_count DESC
+    ";
+    
+    $failed_merchant_stats = $conn->prepare($failed_merchant_stats_sql);
+    $failed_merchant_stats->execute([$filter_date, $filter_date_end]);
+    $failed_merchant_data = $failed_merchant_stats->fetchAll(PDO::FETCH_ASSOC);
+    
     // Get total transactions per merchant (both IN and OUT) for comparison
     $total_merchant_stats_sql = "
         SELECT 
@@ -63,8 +104,8 @@ try {
             COUNT(*) as total_count,
             SUM(CASE WHEN LogType = 'OUT' THEN 1 ELSE 0 END) as out_count,
             SUM(CASE WHEN LogType = 'IN' THEN 1 ELSE 0 END) as in_count,
-            SUM(CASE WHEN LogType = 'OUT' THEN Amount ELSE 0 END) as out_amount,
-            SUM(CASE WHEN LogType = 'IN' THEN Amount ELSE 0 END) as in_amount
+            SUM(CASE WHEN LogType = 'OUT' AND MetaData LIKE 'Total response time%' THEN 1 ELSE 0 END) as successful_out_count,
+            SUM(CASE WHEN LogType = 'OUT' AND MetaData NOT LIKE 'Total response time%' THEN 1 ELSE 0 END) as failed_out_count
         FROM MerchantLogs 
         WHERE CAST(LogDate as DATE) BETWEEN ? AND ?
         GROUP BY MerchantName
@@ -75,14 +116,16 @@ try {
     $total_merchant_stats->execute([$filter_date, $filter_date_end]);
     $total_merchant_data = $total_merchant_stats->fetchAll(PDO::FETCH_ASSOC);
     
-    // Get hourly trends for OUT transactions only with amounts
+    // Get hourly trends for valid OUT transactions only with amounts
     $hourly_sql = "
         SELECT 
             DATEPART(HOUR, l.LogDate) as hour,
             COUNT(*) as out_count,
             SUM(l.Amount) as out_amount
         FROM MerchantLogs l
-        WHERE CAST(l.LogDate as DATE) BETWEEN ? AND ? AND l.LogType = 'OUT'
+        WHERE CAST(l.LogDate as DATE) BETWEEN ? AND ? 
+        AND l.LogType = 'OUT' 
+        AND l.MetaData LIKE 'Total response time%'
         GROUP BY DATEPART(HOUR, l.LogDate)
         ORDER BY hour
     ";
@@ -91,7 +134,24 @@ try {
     $hourly_data->execute([$filter_date, $filter_date_end]);
     $hourly_data = $hourly_data->fetchAll(PDO::FETCH_ASSOC);
     
-    // Get recent OUT logs for the filtered period
+    // Get hourly trends for failed OUT transactions
+    $hourly_failed_sql = "
+        SELECT 
+            DATEPART(HOUR, l.LogDate) as hour,
+            COUNT(*) as failed_count
+        FROM MerchantLogs l
+        WHERE CAST(l.LogDate as DATE) BETWEEN ? AND ? 
+        AND l.LogType = 'OUT' 
+        AND l.MetaData NOT LIKE 'Total response time%'
+        GROUP BY DATEPART(HOUR, l.LogDate)
+        ORDER BY hour
+    ";
+    
+    $hourly_failed_data = $conn->prepare($hourly_failed_sql);
+    $hourly_failed_data->execute([$filter_date, $filter_date_end]);
+    $hourly_failed_data = $hourly_failed_data->fetchAll(PDO::FETCH_ASSOC);
+    
+    // Get recent valid OUT logs for the filtered period
     $recent_sql = "
         SELECT TOP 20 
             l.LogId,
@@ -124,12 +184,20 @@ try {
     die("Error: " . $e->getMessage());
 }
 
+// Calculate success rate
+$total_out_transactions = ($stats['total_out_logs'] ?? 0) + ($failed_stats['failed_out_logs'] ?? 0);
+$success_rate = $total_out_transactions > 0 ? (($stats['total_out_logs'] ?? 0) / $total_out_transactions) * 100 : 0;
+
 // Prepare data for export
 $export_data = [
     'date_range' => $filter_date . ' to ' . $filter_date_end,
     'stats' => $stats,
+    'failed_stats' => $failed_stats,
+    'success_rate' => $success_rate,
     'merchants' => $merchant_stats_data,
-    'hourly_data' => $hourly_data
+    'failed_merchants' => $failed_merchant_data,
+    'hourly_data' => $hourly_data,
+    'hourly_failed_data' => $hourly_failed_data
 ];
 ?>
 
@@ -166,27 +234,27 @@ $export_data = [
     <!-- Statistics Cards -->
     <div class="stats-grid">
         <div class="stat-card total">
-            <h3>Completed Transactions</h3>
-            <div class="stat-number"><?php echo number_format($stats['total_out_logs']); ?></div>
-            <p>Successful OUT logs</p>
+            <h3>Successful OUT</h3>
+            <div class="stat-number"><?php echo number_format($stats['total_out_logs'] ?? 0); ?></div>
+            <p>Valid transactions</p>
         </div>
         
         <div class="stat-card success">
+            <h3>Success Rate</h3>
+            <div class="stat-number"><?php echo number_format($success_rate, 1); ?>%</div>
+            <p>Based on MetaData</p>
+        </div>
+        
+        <div class="stat-card failed">
+            <h3>Failed OUT</h3>
+            <div class="stat-number"><?php echo number_format($failed_stats['failed_out_logs'] ?? 0); ?></div>
+            <p>Invalid MetaData</p>
+        </div>
+        
+        <div class="stat-card amount">
             <h3>Total Amount</h3>
             <div class="stat-number">MK<?php echo number_format($stats['total_amount'] ?? 0, 2); ?></div>
-            <p>From completed transactions</p>
-        </div>
-        
-        <div class="stat-card pending">
-            <h3>Avg Response Time</h3>
-            <div class="stat-number"><?php echo number_format($stats['avg_response_time'] ?? 0, 2); ?>ms</div>
-            <p>Processing time</p>
-        </div>
-        
-        <div class="stat-card incomplete">
-            <h3>Active Merchants</h3>
-            <div class="stat-number"><?php echo number_format(count($merchant_stats_data)); ?></div>
-            <p>With completed transactions</p>
+            <p>From successful transactions</p>
         </div>
     </div>
 
@@ -194,21 +262,31 @@ $export_data = [
     <h3 class="section-title">Merchant Performance - <?php echo date('M j, Y', strtotime($filter_date)); echo $filter_date !== $filter_date_end ? ' to ' . date('M j, Y', strtotime($filter_date_end)) : ''; ?></h3>
     <div class="merchant-grid">
         <?php foreach($merchant_stats_data as $merchant): 
-            // Find total transactions for this merchant for comparison
+            // Find total and failed transactions for this merchant for comparison
             $total_for_merchant = 0;
+            $failed_for_merchant = 0;
             $in_for_merchant = 0;
-            $in_amount_for_merchant = 0;
+            
             foreach($total_merchant_data as $total_merchant) {
                 if ($total_merchant['MerchantName'] === $merchant['MerchantName']) {
                     $total_for_merchant = $total_merchant['total_count'];
+                    $failed_for_merchant = $total_merchant['failed_out_count'];
                     $in_for_merchant = $total_merchant['in_count'];
-                    $in_amount_for_merchant = $total_merchant['in_amount'];
+                    break;
+                }
+            }
+            
+            // Also check failed merchant data
+            foreach($failed_merchant_data as $failed_merchant) {
+                if ($failed_merchant['MerchantName'] === $merchant['MerchantName']) {
+                    $failed_for_merchant = $failed_merchant['failed_count'];
                     break;
                 }
             }
             
             // Calculate success rate
-            $success_rate = $total_for_merchant > 0 ? ($merchant['out_count'] / $total_for_merchant) * 100 : 0;
+            $total_out_for_merchant = $merchant['out_count'] + $failed_for_merchant;
+            $success_rate = $total_out_for_merchant > 0 ? ($merchant['out_count'] / $total_out_for_merchant) * 100 : 0;
         ?>
         <div class="merchant-card">
             <div class="merchant-header">
@@ -220,14 +298,14 @@ $export_data = [
             <div class="merchant-stats">
                 <div class="stat-item">
                     <div class="stat-value"><?php echo number_format($merchant['out_count']); ?></div>
-                    <div class="stat-label">Completed</div>
+                    <div class="stat-label">Successful</div>
                 </div>
                 <div class="stat-item">
-                    <div class="stat-value"><?php echo number_format($in_for_merchant); ?></div>
-                    <div class="stat-label">Requests</div>
+                    <div class="stat-value"><?php echo number_format($failed_for_merchant); ?></div>
+                    <div class="stat-label">Failed</div>
                 </div>
                 <div class="stat-item">
-                    <div class="stat-value">MK<?php echo number_format($merchant['total_amount'], 2); ?></div>
+                    <div class="stat-value small-amount">MK<?php echo number_format($merchant['total_amount'], 2); ?></div>
                     <div class="stat-label">Amount</div>
                 </div>
                 <div class="stat-item">
@@ -244,7 +322,7 @@ $export_data = [
     <!-- Charts -->
     <div class="charts-grid">
         <div class="chart-container">
-            <h3 class="section-title">Completed Transactions by Hour</h3>
+            <h3 class="section-title">Successful vs Failed OUT Transactions by Hour</h3>
             <canvas id="malpayHourlyChart" height="300"></canvas>
         </div>
         
@@ -254,9 +332,9 @@ $export_data = [
         </div>
     </div>
 
-    <!-- Recent Completed Transactions -->
+    <!-- Recent Successful Transactions -->
     <div class="recent-transactions">
-        <h3 class="section-title">Recent Completed Transactions - <?php echo date('M j, Y', strtotime($filter_date)); echo $filter_date !== $filter_date_end ? ' to ' . date('M j, Y', strtotime($filter_date_end)) : ''; ?></h3>
+        <h3 class="section-title">Recent Successful OUT Transactions - <?php echo date('M j, Y', strtotime($filter_date)); echo $filter_date !== $filter_date_end ? ' to ' . date('M j, Y', strtotime($filter_date_end)) : ''; ?></h3>
         <div class="table-container">
             <table>
                 <thead>
@@ -339,36 +417,38 @@ document.addEventListener('DOMContentLoaded', function() {
         exportToCSV(exportData, 'malpay');
     });
 
+    // Prepare hourly data for chart
+    const hourlyLabels = <?php echo json_encode(array_column($hourly_data, 'hour')); ?>;
+    const successfulHourlyData = <?php echo json_encode(array_column($hourly_data, 'out_count')); ?>;
+    const failedHourlyData = <?php echo json_encode(array_column($hourly_failed_data, 'failed_count')); ?>;
+
     // MALPAY Charts
     const hourlyCtx = document.getElementById('malpayHourlyChart').getContext('2d');
     new Chart(hourlyCtx, {
         type: 'bar',
         data: {
-            labels: <?php echo json_encode(array_column($hourly_data, 'hour')); ?>,
+            labels: hourlyLabels,
             datasets: [
                 {
-                    label: 'Completed Transactions',
-                    data: <?php echo json_encode(array_column($hourly_data, 'out_count')); ?>,
+                    label: 'Successful OUT',
+                    data: successfulHourlyData,
                     backgroundColor: '#27ae60',
                     borderColor: '#27ae60',
-                    borderWidth: 1,
-                    yAxisID: 'y'
+                    borderWidth: 1
                 },
                 {
-                    label: 'Amount (MK)',
-                    data: <?php echo json_encode(array_column($hourly_data, 'out_amount')); ?>,
-                    type: 'line',
-                    borderColor: '#3498db',
-                    backgroundColor: 'rgba(52, 152, 219, 0.1)',
-                    borderWidth: 2,
-                    yAxisID: 'y1'
+                    label: 'Failed OUT',
+                    data: failedHourlyData,
+                    backgroundColor: '#e74c3c',
+                    borderColor: '#e74c3c',
+                    borderWidth: 1
                 }
             ]
         },
         options: {
             responsive: true,
             plugins: {
-                title: { display: true, text: 'Completed Transactions and Amount by Hour' }
+                title: { display: true, text: 'Successful vs Failed OUT Transactions by Hour' }
             },
             scales: {
                 x: {
@@ -376,16 +456,7 @@ document.addEventListener('DOMContentLoaded', function() {
                 },
                 y: {
                     title: { display: true, text: 'Number of Transactions' },
-                    beginAtZero: true,
-                    position: 'left'
-                },
-                y1: {
-                    title: { display: true, text: 'Amount (MK)' },
-                    beginAtZero: true,
-                    position: 'right',
-                    grid: {
-                        drawOnChartArea: false
-                    }
+                    beginAtZero: true
                 }
             }
         }
@@ -455,31 +526,37 @@ function exportToCSV(data, dashboardType) {
     let csvContent = "data:text/csv;charset=utf-8,";
     
     // Header
-    csvContent += "MalPay Transaction Report," + data.date_range + "\n\n";
+    csvContent += "MalPay Transaction Report (MetaData Filtered)," + data.date_range + "\n\n";
     
     // Summary Statistics
     csvContent += "SUMMARY STATISTICS\n";
-    csvContent += "Completed Transactions," + (data.stats.total_out_logs || 0) + "\n";
-    csvContent += "Total Amount,MK" + (data.stats.total_amount ? Number(data.stats.total_amount).toFixed(2) : '0.00') + "\n";
-    csvContent += "Average Response Time," + (data.stats.avg_response_time ? Number(data.stats.avg_response_time).toFixed(2) + 'ms' : '0ms') + "\n";
-    csvContent += "Active Merchants," + data.merchants.length + "\n\n";
+    csvContent += "Successful OUT Transactions," + (data.stats.total_out_logs || 0) + "\n";
+    csvContent += "Failed OUT Transactions," + (data.failed_stats.failed_out_logs || 0) + "\n";
+    csvContent += "Success Rate," + data.success_rate.toFixed(1) + "%\n";
+    csvContent += "Total Amount from Successful,MK" + (data.stats.total_amount ? Number(data.stats.total_amount).toFixed(2) : '0.00') + "\n";
+    csvContent += "Total Amount from Failed,MK" + (data.failed_stats.failed_amount ? Number(data.failed_stats.failed_amount).toFixed(2) : '0.00') + "\n\n";
     
     // Merchant Data
     csvContent += "MERCHANT PERFORMANCE\n";
-    csvContent += "Merchant,Completed Transactions,Total Amount\n";
+    csvContent += "Merchant,Successful OUT,Failed OUT,Total Amount,Success Rate\n";
     
     data.merchants.forEach(merchant => {
-        csvContent += `"${merchant.MerchantName}",${merchant.out_count},MK${Number(merchant.total_amount).toFixed(2)}\n`;
+        const failedCount = data.failed_merchants.find(m => m.MerchantName === merchant.MerchantName)?.failed_count || 0;
+        const totalOut = merchant.out_count + failedCount;
+        const successRate = totalOut > 0 ? ((merchant.out_count / totalOut) * 100).toFixed(1) : 0;
+        
+        csvContent += `"${merchant.MerchantName}",${merchant.out_count},${failedCount},MK${Number(merchant.total_amount).toFixed(2)},${successRate}%\n`;
     });
     
     csvContent += "\n";
     
     // Hourly Data
     csvContent += "HOURLY BREAKDOWN\n";
-    csvContent += "Hour,Completed Transactions,Total Amount\n";
+    csvContent += "Hour,Successful OUT,Failed OUT\n";
     
     data.hourly_data.forEach(hour => {
-        csvContent += `${hour.hour}:00,${hour.out_count},MK${Number(hour.out_amount).toFixed(2)}\n`;
+        const failedCount = data.hourly_failed_data.find(h => h.hour === hour.hour)?.failed_count || 0;
+        csvContent += `${hour.hour}:00,${hour.out_count},${failedCount}\n`;
     });
     
     // Create download link
@@ -522,3 +599,141 @@ function applyPrintStyles() {
 
 applyPrintStyles();
 </script>
+
+<style>
+.section-title {
+    color: #ffffff;
+    margin: 20px 0 15px 0;
+    font-size: 1.4em;
+    font-weight: 600;
+    text-shadow: 1px 1px 2px rgba(0,0,0,0.3);
+}
+
+.stat-number {
+    font-size: 1.4em;
+    font-weight: bold;
+    margin: 10px 0;
+    word-break: break-word;
+    overflow-wrap: break-word;
+    line-height: 1.2;
+}
+
+.small-amount {
+    font-size: 1.1em !important;
+}
+
+.stat-card.amount .stat-number {
+    font-size: 1.3em;
+}
+
+.export-buttons {
+    display: flex;
+    gap: 10px;
+    margin-left: 20px;
+}
+
+.export-btn {
+    padding: 8px 15px;
+    background: #6c757d;
+    color: white;
+    border: none;
+    border-radius: 5px;
+    cursor: pointer;
+    font-size: 0.9em;
+    transition: background 0.3s;
+}
+
+.export-btn:hover {
+    background: #5a6268;
+}
+
+.success-rate {
+    padding: 2px 8px;
+    border-radius: 12px;
+    font-size: 12px;
+    font-weight: bold;
+}
+
+.success-rate.high {
+    background: #d4edda;
+    color: #155724;
+}
+
+.success-rate.medium {
+    background: #fff3cd;
+    color: #856404;
+}
+
+.success-rate.low {
+    background: #f8d7da;
+    color: #721c24;
+}
+
+.merchant-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 10px;
+}
+
+.merchant-name {
+    flex: 1;
+    font-weight: bold;
+}
+
+/* Ensure cards don't overflow */
+.stat-card {
+    min-height: 120px;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    padding: 15px;
+}
+
+.merchant-card {
+    min-height: 140px;
+    padding: 15px;
+}
+
+.stat-item .stat-value {
+    font-size: 1.1em;
+    font-weight: bold;
+    margin-bottom: 5px;
+}
+
+/* Responsive design */
+@media (max-width: 768px) {
+    .filters .filter-group {
+        flex-direction: column;
+        gap: 10px;
+    }
+    
+    .export-buttons {
+        margin-left: 0;
+        justify-content: center;
+        flex-wrap: wrap;
+    }
+    
+    .stat-number {
+        font-size: 1.2em;
+    }
+    
+    .stat-card.amount .stat-number {
+        font-size: 1.1em;
+    }
+}
+
+@media (max-width: 480px) {
+    .stat-number {
+        font-size: 1.1em;
+    }
+    
+    .stat-card.amount .stat-number {
+        font-size: 1em;
+    }
+    
+    .small-amount {
+        font-size: 0.9em !important;
+    }
+}
+</style>
