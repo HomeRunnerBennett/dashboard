@@ -14,8 +14,8 @@ if (strtotime($filter_date_end) < strtotime($filter_date)) {
 try {
     $conn = connectDB(Config::$npms_config);
     
-    // Build WHERE clause for filters
-    $where_clause = "WHERE CAST(TransactionDate as DATE) BETWEEN ? AND ?";
+    // Build WHERE clause for filters - Only transactions where Token starts with 'Token1'
+    $where_clause = "WHERE CAST(TransactionDate as DATE) BETWEEN ? AND ? AND Token LIKE 'Token1%'";
     $params = [$filter_date, $filter_date_end];
     
     if ($filter_status !== 'all') {
@@ -23,7 +23,7 @@ try {
         $params[] = $filter_status;
     }
     
-    // Get overall statistics for the filtered period
+    // Get overall statistics for the filtered period - Only Token1 transactions
     $stats_sql = "
         SELECT 
             COUNT(*) as total_transactions,
@@ -40,7 +40,25 @@ try {
     $stats->execute($params);
     $stats = $stats->fetch(PDO::FETCH_ASSOC);
     
-    // Get hourly trends for the day
+    // Get failed transactions (Token doesn't start with 'Token1')
+    $failed_stats_sql = "
+        SELECT 
+            COUNT(*) as failed_token_count,
+            SUM(TransactionAmount) as failed_token_amount
+        FROM TokenTransactions 
+        WHERE CAST(TransactionDate as DATE) BETWEEN ? AND ? 
+        AND Token NOT LIKE 'Token1%'
+    ";
+    
+    $failed_stats = $conn->prepare($failed_stats_sql);
+    $failed_stats->execute([$filter_date, $filter_date_end]);
+    $failed_stats = $failed_stats->fetch(PDO::FETCH_ASSOC);
+    
+    // Calculate success rate based on Token filter
+    $total_all_transactions = ($stats['total_transactions'] ?? 0) + ($failed_stats['failed_token_count'] ?? 0);
+    $token_success_rate = $total_all_transactions > 0 ? (($stats['total_transactions'] ?? 0) / $total_all_transactions) * 100 : 0;
+    
+    // Get hourly trends for Token1 transactions only
     $hourly_sql = "
         SELECT 
             DATEPART(HOUR, TransactionDate) as hour,
@@ -49,7 +67,7 @@ try {
             SUM(CASE WHEN TransactionStatus = 'pending' THEN 1 ELSE 0 END) as pending,
             SUM(CASE WHEN TransactionStatus = 'failed' THEN 1 ELSE 0 END) as failed
         FROM TokenTransactions 
-        WHERE CAST(TransactionDate as DATE) BETWEEN ? AND ?
+        WHERE CAST(TransactionDate as DATE) BETWEEN ? AND ? AND Token LIKE 'Token1%'
         GROUP BY DATEPART(HOUR, TransactionDate)
         ORDER BY hour
     ";
@@ -58,14 +76,14 @@ try {
     $hourly_data->execute([$filter_date, $filter_date_end]);
     $hourly_data = $hourly_data->fetchAll(PDO::FETCH_ASSOC);
     
-    // Get service distribution
+    // Get service distribution for Token1 transactions only
     $service_sql = "
         SELECT 
             Service,
             COUNT(*) as count,
             SUM(TransactionAmount) as amount
         FROM TokenTransactions 
-        WHERE CAST(TransactionDate as DATE) BETWEEN ? AND ?
+        WHERE CAST(TransactionDate as DATE) BETWEEN ? AND ? AND Token LIKE 'Token1%'
         GROUP BY Service
         ORDER BY count DESC
     ";
@@ -74,7 +92,7 @@ try {
     $service_data->execute([$filter_date, $filter_date_end]);
     $service_data = $service_data->fetchAll(PDO::FETCH_ASSOC);
     
-    // Get recent transactions
+    // Get recent Token1 transactions
     $recent_sql = "
         SELECT TOP 15 
             TransactionId,
@@ -85,7 +103,8 @@ try {
             Service,
             WalletBalance,
             Commission,
-            MerchantTransactionId
+            MerchantTransactionId,
+            Token
         FROM TokenTransactions 
         $where_clause
         ORDER BY TransactionDate DESC
@@ -107,6 +126,8 @@ try {
 $export_data = [
     'date_range' => $filter_date . ' to ' . $filter_date_end,
     'stats' => $stats,
+    'failed_stats' => $failed_stats,
+    'token_success_rate' => $token_success_rate,
     'services' => $service_data,
     'hourly_data' => $hourly_data
 ];
@@ -143,27 +164,27 @@ $export_data = [
     <!-- Statistics Cards -->
     <div class="stats-grid">
         <div class="stat-card total">
-            <h3>Total Transactions</h3>
-            <div class="stat-number"><?php echo number_format($stats['total_transactions']); ?></div>
-            <p><?php echo date('M j, Y', strtotime($filter_date)); echo $filter_date !== $filter_date_end ? ' to ' . date('M j, Y', strtotime($filter_date_end)) : ''; ?></p>
+            <h3>Valid Transactions</h3>
+            <div class="stat-number"><?php echo number_format($stats['total_transactions'] ?? 0); ?></div>
+            <p>Token starts with 'Token1'</p>
         </div>
         
         <div class="stat-card success">
-            <h3>Successful</h3>
-            <div class="stat-number"><?php echo number_format($stats['successful']); ?></div>
-            <p><?php echo $stats['total_transactions'] > 0 ? round(($stats['successful']/$stats['total_transactions'])*100, 1) : 0; ?>% success rate</p>
+            <h3>Token Success Rate</h3>
+            <div class="stat-number"><?php echo number_format($token_success_rate, 1); ?>%</div>
+            <p>Based on Token validation</p>
         </div>
         
         <div class="stat-card pending">
-            <h3>Pending</h3>
-            <div class="stat-number"><?php echo number_format($stats['pending']); ?></div>
-            <p>Awaiting processing</p>
+            <h3>Invalid Tokens</h3>
+            <div class="stat-number"><?php echo number_format($failed_stats['failed_token_count'] ?? 0); ?></div>
+            <p>Token doesn't start with 'Token1'</p>
         </div>
         
         <div class="stat-card failed">
-            <h3>Failed</h3>
-            <div class="stat-number"><?php echo number_format($stats['failed']); ?></div>
-            <p>Requires attention</p>
+            <h3>Total Amount</h3>
+            <div class="stat-number">MK<?php echo number_format($stats['total_amount'] ?? 0, 2); ?></div>
+            <p>From valid transactions</p>
         </div>
     </div>
 
@@ -191,9 +212,9 @@ $export_data = [
                 </div>
                 <div class="stat-item">
                     <div class="stat-value">
-                        <?php echo $stats['total_transactions'] > 0 ? number_format(($service['count'] / $stats['total_transactions']) * 100, 1) : 0; ?>%
+                        <?php echo number_format($success_rate, 1); ?>%
                     </div>
-                    <div class="stat-label">Market Share</div>
+                    <div class="stat-label">Success Rate</div>
                 </div>
             </div>
         </div>
@@ -203,19 +224,19 @@ $export_data = [
     <!-- Charts -->
     <div class="charts-grid">
         <div class="chart-container">
-            <h3 class="section-title">Hourly Transaction Trends</h3>
+            <h3 class="section-title">Hourly Transaction Trends (Valid Tokens)</h3>
             <canvas id="npmsHourlyChart" height="300"></canvas>
         </div>
         
         <div class="chart-container">
-            <h3 class="section-title">Service Distribution</h3>
+            <h3 class="section-title">Service Distribution (Valid Tokens)</h3>
             <canvas id="npmsServiceChart" height="300"></canvas>
         </div>
     </div>
 
     <!-- Recent Transactions -->
     <div class="recent-transactions">
-        <h3 class="section-title">Recent Transactions - <?php echo date('M j, Y', strtotime($filter_date)); echo $filter_date !== $filter_date_end ? ' to ' . date('M j, Y', strtotime($filter_date_end)) : ''; ?></h3>
+        <h3 class="section-title">Recent Valid Transactions - <?php echo date('M j, Y', strtotime($filter_date)); echo $filter_date !== $filter_date_end ? ' to ' . date('M j, Y', strtotime($filter_date_end)) : ''; ?></h3>
         <div class="table-container">
             <table>
                 <thead>
@@ -226,9 +247,9 @@ $export_data = [
                         <th>Amount</th>
                         <th>Time</th>
                         <th>Service</th>
+                        <th>Token</th>
                         <th>Balance</th>
                         <th>Commission</th>
-                        <th>Merchant ID</th>
                     </tr>
                 </thead>
                 <tbody>
@@ -242,9 +263,9 @@ $export_data = [
                         <td>MK<?php echo number_format($transaction['TransactionAmount'], 2); ?></td>
                         <td><?php echo date('H:i:s', strtotime($transaction['TransactionDate'])); ?></td>
                         <td><?php echo $transaction['Service']; ?></td>
+                        <td><?php echo substr($transaction['Token'], 0, 10) . '...'; ?></td>
                         <td>MK<?php echo number_format($transaction['WalletBalance'], 2); ?></td>
                         <td>MK<?php echo number_format($transaction['Commission'], 2); ?></td>
-                        <td><?php echo $transaction['MerchantTransactionId']; ?></td>
                     </tr>
                     <?php endforeach; ?>
                 </tbody>
@@ -327,7 +348,7 @@ document.addEventListener('DOMContentLoaded', function() {
         options: {
             responsive: true,
             plugins: {
-                title: { display: true, text: 'Hourly Transaction Status Distribution' }
+                title: { display: true, text: 'Hourly Transaction Status Distribution (Valid Tokens Only)' }
             },
             scales: {
                 x: {
@@ -355,7 +376,7 @@ document.addEventListener('DOMContentLoaded', function() {
             responsive: true,
             plugins: {
                 legend: { position: 'bottom' },
-                title: { display: true, text: 'Transactions by Service Type' }
+                title: { display: true, text: 'Transactions by Service Type (Valid Tokens Only)' }
             }
         }
     });
@@ -366,24 +387,25 @@ function exportToCSVNPMS(data) {
     let csvContent = "data:text/csv;charset=utf-8,";
     
     // Header
-    csvContent += "NPMS Transaction Report," + data.date_range + "\n\n";
+    csvContent += "NPMS Transaction Report (Token Filtered)," + data.date_range + "\n\n";
     
     // Summary Statistics
     csvContent += "SUMMARY STATISTICS\n";
-    csvContent += "Total Transactions," + (data.stats.total_transactions || 0) + "\n";
-    csvContent += "Successful," + (data.stats.successful || 0) + "\n";
-    csvContent += "Pending," + (data.stats.pending || 0) + "\n";
-    csvContent += "Failed," + (data.stats.failed || 0) + "\n";
-    csvContent += "Total Amount,MK" + (data.stats.total_amount ? Number(data.stats.total_amount).toFixed(2) : '0.00') + "\n";
-    csvContent += "Success Rate," + (data.stats.total_transactions > 0 ? ((data.stats.successful / data.stats.total_transactions) * 100).toFixed(1) + '%' : '0%') + "\n\n";
+    csvContent += "Valid Transactions (Token1)," + (data.stats.total_transactions || 0) + "\n";
+    csvContent += "Invalid Tokens," + (data.failed_stats.failed_token_count || 0) + "\n";
+    csvContent += "Token Success Rate," + data.token_success_rate.toFixed(1) + "%\n";
+    csvContent += "Total Amount from Valid,MK" + (data.stats.total_amount ? Number(data.stats.total_amount).toFixed(2) : '0.00') + "\n";
+    csvContent += "Successful Status," + (data.stats.successful || 0) + "\n";
+    csvContent += "Pending Status," + (data.stats.pending || 0) + "\n";
+    csvContent += "Failed Status," + (data.stats.failed || 0) + "\n\n";
     
     // Service Data
     csvContent += "SERVICE PERFORMANCE\n";
-    csvContent += "Service,Transaction Count,Total Amount,Market Share\n";
+    csvContent += "Service,Transaction Count,Total Amount,Success Rate\n";
     
     data.services.forEach(service => {
-        const marketShare = data.stats.total_transactions > 0 ? ((service.count / data.stats.total_transactions) * 100).toFixed(1) : 0;
-        csvContent += `"${service.Service}",${service.count},MK${Number(service.amount).toFixed(2)},${marketShare}%\n`;
+        const successRate = service.count > 0 ? ((data.stats.successful / service.count) * 100).toFixed(1) : 0;
+        csvContent += `"${service.Service}",${service.count},MK${Number(service.amount).toFixed(2)},${successRate}%\n`;
     });
     
     csvContent += "\n";
