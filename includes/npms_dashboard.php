@@ -114,6 +114,29 @@ try {
     $recent_transactions->execute($params);
     $recent_transactions = $recent_transactions->fetchAll(PDO::FETCH_ASSOC);
     
+    // Get recent failed transactions (Token doesn't start with 'Token1')
+    $recent_failed_sql = "
+        SELECT TOP 15 
+            TransactionId,
+            ReferenceNumber,
+            TransactionStatus,
+            TransactionAmount,
+            TransactionDate,
+            Service,
+            WalletBalance,
+            Commission,
+            MerchantTransactionId,
+            Token
+        FROM TokenTransactions 
+        WHERE CAST(TransactionDate as DATE) BETWEEN ? AND ? 
+        AND Token NOT LIKE 'Token1%'
+        ORDER BY TransactionDate DESC
+    ";
+    
+    $recent_failed_transactions = $conn->prepare($recent_failed_sql);
+    $recent_failed_transactions->execute([$filter_date, $filter_date_end]);
+    $recent_failed_transactions = $recent_failed_transactions->fetchAll(PDO::FETCH_ASSOC);
+    
     // Get unique services for filter dropdown
     $services_sql = "SELECT DISTINCT Service FROM TokenTransactions ORDER BY Service";
     $services = $conn->query($services_sql)->fetchAll(PDO::FETCH_COLUMN);
@@ -129,7 +152,8 @@ $export_data = [
     'failed_stats' => $failed_stats,
     'token_success_rate' => $token_success_rate,
     'services' => $service_data,
-    'hourly_data' => $hourly_data
+    'hourly_data' => $hourly_data,
+    'recent_failed_transactions' => $recent_failed_transactions
 ];
 ?>
 
@@ -234,7 +258,7 @@ $export_data = [
         </div>
     </div>
 
-    <!-- Recent Transactions -->
+    <!-- Recent Valid Transactions -->
     <div class="recent-transactions">
         <h3 class="section-title">Recent Valid Transactions - <?php echo date('M j, Y', strtotime($filter_date)); echo $filter_date !== $filter_date_end ? ' to ' . date('M j, Y', strtotime($filter_date_end)) : ''; ?></h3>
         <div class="table-container">
@@ -268,6 +292,53 @@ $export_data = [
                         <td>MK<?php echo number_format($transaction['Commission'], 2); ?></td>
                     </tr>
                     <?php endforeach; ?>
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    <!-- Recent Failed Transactions -->
+    <div class="recent-transactions">
+        <h3 class="section-title">Recent Failed Transactions (Invalid Tokens) - <?php echo date('M j, Y', strtotime($filter_date)); echo $filter_date !== $filter_date_end ? ' to ' . date('M j, Y', strtotime($filter_date_end)) : ''; ?></h3>
+        <div class="table-container">
+            <table>
+                <thead>
+                    <tr>
+                        <th>ID</th>
+                        <th>Reference</th>
+                        <th>Status</th>
+                        <th>Amount</th>
+                        <th>Time</th>
+                        <th>Service</th>
+                        <th>Token</th>
+                        <th>Balance</th>
+                        <th>Commission</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <?php if (!empty($recent_failed_transactions)): ?>
+                        <?php foreach($recent_failed_transactions as $transaction): ?>
+                        <tr>
+                            <td><?php echo $transaction['TransactionId']; ?></td>
+                            <td><?php echo $transaction['ReferenceNumber']; ?></td>
+                            <td class="status-<?php echo $transaction['TransactionStatus']; ?>">
+                                <?php echo ucfirst($transaction['TransactionStatus']); ?>
+                            </td>
+                            <td>MK<?php echo number_format($transaction['TransactionAmount'], 2); ?></td>
+                            <td><?php echo date('H:i:s', strtotime($transaction['TransactionDate'])); ?></td>
+                            <td><?php echo $transaction['Service']; ?></td>
+                            <td><?php echo substr($transaction['Token'], 0, 10) . '...'; ?></td>
+                            <td>MK<?php echo number_format($transaction['WalletBalance'], 2); ?></td>
+                            <td>MK<?php echo number_format($transaction['Commission'], 2); ?></td>
+                        </tr>
+                        <?php endforeach; ?>
+                    <?php else: ?>
+                        <tr>
+                            <td colspan="9" style="text-align: center; color: #7f8c8d; padding: 20px;">
+                                No failed transactions found for the selected date range.
+                            </td>
+                        </tr>
+                    <?php endif; ?>
                 </tbody>
             </table>
         </div>
@@ -416,6 +487,16 @@ function exportToCSVNPMS(data) {
     
     data.hourly_data.forEach(hour => {
         csvContent += `${hour.hour}:00,${hour.count},${hour.successful},${hour.pending},${hour.failed}\n`;
+    });
+    
+    csvContent += "\n";
+    
+    // Failed Transactions Data
+    csvContent += "RECENT FAILED TRANSACTIONS (INVALID TOKENS)\n";
+    csvContent += "Transaction ID,Reference,Status,Amount,Time,Service,Token,Wallet Balance,Commission\n";
+    
+    data.recent_failed_transactions.forEach(transaction => {
+        csvContent += `"${transaction.TransactionId}","${transaction.ReferenceNumber}","${transaction.TransactionStatus}",MK${Number(transaction.TransactionAmount).toFixed(2)},"${transaction.TransactionDate}","${transaction.Service}","${transaction.Token}",MK${Number(transaction.WalletBalance).toFixed(2)},MK${Number(transaction.Commission).toFixed(2)}\n`;
     });
     
     // Create download link
