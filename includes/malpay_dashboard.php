@@ -157,7 +157,7 @@ $export_data = [
             
             <div class="export-buttons">
                 <button class="export-btn" id="printReport">📄 Print Report</button>
-                <button class="export-btn" id="exportPDF">📊 Export PDF</button>
+                <button class="export-btn" id="exportPDF" onclick="exportToPDF('malpay')">📊 Export PDF</button>
                 <button class="export-btn" id="exportCSV">📋 Export CSV</button>
             </div>
         </div>
@@ -256,7 +256,7 @@ $export_data = [
 
     <!-- Recent Completed Transactions -->
     <div class="recent-transactions">
-        <h3 class="section-title" color="black">Recent Completed Transactions - <?php echo date('M j, Y', strtotime($filter_date)); echo $filter_date !== $filter_date_end ? ' to ' . date('M j, Y', strtotime($filter_date_end)) : ''; ?></h3>
+        <h3 class="section-title">Recent Completed Transactions - <?php echo date('M j, Y', strtotime($filter_date)); echo $filter_date !== $filter_date_end ? ' to ' . date('M j, Y', strtotime($filter_date_end)) : ''; ?></h3>
         <div class="table-container">
             <table>
                 <thead>
@@ -334,14 +334,9 @@ document.addEventListener('DOMContentLoaded', function() {
         window.print();
     });
 
-    document.getElementById('exportPDF').addEventListener('click', function() {
-        alert('PDF export would be generated here. This would require a server-side PDF generation library.');
-        // In a real implementation, this would make an AJAX call to generate PDF
-    });
-
     document.getElementById('exportCSV').addEventListener('click', function() {
         const exportData = JSON.parse(document.getElementById('exportData').dataset.export);
-        exportToCSV(exportData);
+        exportToCSV(exportData, 'malpay');
     });
 
     // MALPAY Charts
@@ -429,8 +424,34 @@ document.addEventListener('DOMContentLoaded', function() {
     });
 });
 
+// PDF Export function
+function exportToPDF(dashboardType) {
+    const exportData = JSON.parse(document.getElementById('exportData').dataset.export);
+    
+    // Create a form and submit it to the PDF generation endpoint
+    const form = document.createElement('form');
+    form.method = 'POST';
+    form.action = 'generate_pdf.php';
+    
+    const input = document.createElement('input');
+    input.type = 'hidden';
+    input.name = 'export_data';
+    input.value = JSON.stringify(exportData);
+    form.appendChild(input);
+    
+    const dashboardInput = document.createElement('input');
+    dashboardInput.type = 'hidden';
+    dashboardInput.name = 'dashboard';
+    dashboardInput.value = dashboardType;
+    form.appendChild(dashboardInput);
+    
+    document.body.appendChild(form);
+    form.submit();
+    document.body.removeChild(form);
+}
+
 // CSV Export function
-function exportToCSV(data) {
+function exportToCSV(data, dashboardType) {
     let csvContent = "data:text/csv;charset=utf-8,";
     
     // Header
@@ -445,7 +466,7 @@ function exportToCSV(data) {
     
     // Merchant Data
     csvContent += "MERCHANT PERFORMANCE\n";
-    csvContent += "Merchant,Completed Transactions,Total Amount,Success Rate\n";
+    csvContent += "Merchant,Completed Transactions,Total Amount\n";
     
     data.merchants.forEach(merchant => {
         csvContent += `"${merchant.MerchantName}",${merchant.out_count},MK${Number(merchant.total_amount).toFixed(2)}\n`;
@@ -501,105 +522,3 @@ function applyPrintStyles() {
 
 applyPrintStyles();
 </script>
-
-<style>
-.section-title {
-    color: #ffffff;
-    margin: 20px 0 15px 0;
-    font-size: 1.4em;
-    font-weight: 600;
-    text-shadow: 1px 1px 2px rgba(0,0,0,0.3);
-}
-
-.stat-number {
-    font-size: 1.8em;
-    font-weight: bold;
-    margin: 10px 0;
-    word-break: break-word;
-    overflow-wrap: break-word;
-}
-
-.export-buttons {
-    display: flex;
-    gap: 10px;
-    margin-left: 20px;
-}
-
-.export-btn {
-    padding: 8px 15px;
-    background: #6c757d;
-    color: white;
-    border: none;
-    border-radius: 5px;
-    cursor: pointer;
-    font-size: 0.9em;
-    transition: background 0.3s;
-}
-
-.export-btn:hover {
-    background: #5a6268;
-}
-
-.success-rate {
-    padding: 2px 8px;
-    border-radius: 12px;
-    font-size: 12px;
-    font-weight: bold;
-}
-
-.success-rate.high {
-    background: #d4edda;
-    color: #155724;
-}
-
-.success-rate.medium {
-    background: #fff3cd;
-    color: #856404;
-}
-
-.success-rate.low {
-    background: #f8d7da;
-    color: #721c24;
-}
-
-.merchant-header {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    margin-bottom: 10px;
-}
-
-.merchant-name {
-    flex: 1;
-    font-weight: bold;
-}
-
-/* Ensure cards don't overflow */
-.stat-card {
-    min-height: 120px;
-    display: flex;
-    flex-direction: column;
-    justify-content: center;
-}
-
-.merchant-card {
-    min-height: 140px;
-}
-
-/* Responsive design */
-@media (max-width: 768px) {
-    .filters .filter-group {
-        flex-direction: column;
-        gap: 10px;
-    }
-    
-    .export-buttons {
-        margin-left: 0;
-        justify-content: center;
-    }
-    
-    .stat-number {
-        font-size: 1.5em;
-    }
-}
-</style>
