@@ -6,14 +6,20 @@ ini_set('max_execution_time', 300);
 
 // Get filter parameters
 $filter_date = $_GET['date'] ?? date('Y-m-d');
+$filter_date_end = $_GET['date_end'] ?? $filter_date;
 $filter_merchant = $_GET['merchant'] ?? 'all';
+
+// Validate date range
+if (strtotime($filter_date_end) < strtotime($filter_date)) {
+    $filter_date_end = $filter_date;
+}
 
 try {
     $conn = connectDB(Config::$malpay_config);
     
     // Build WHERE clause for filters - ONLY OUT transactions (successful completions)
-    $where_clause = "WHERE CAST(l.LogDate as DATE) = ? AND l.LogType = 'OUT'";
-    $params = [$filter_date];
+    $where_clause = "WHERE CAST(l.LogDate as DATE) BETWEEN ? AND ? AND l.LogType = 'OUT'";
+    $params = [$filter_date, $filter_date_end];
     
     if ($filter_merchant !== 'all') {
         $where_clause .= " AND l.MerchantName = ?";
@@ -41,13 +47,13 @@ try {
             COUNT(*) as out_count,
             SUM(l.Amount) as total_amount
         FROM MerchantLogs l
-        WHERE CAST(l.LogDate as DATE) = ? AND l.LogType = 'OUT'
+        WHERE CAST(l.LogDate as DATE) BETWEEN ? AND ? AND l.LogType = 'OUT'
         GROUP BY l.MerchantName
         ORDER BY out_count DESC
     ";
     
     $merchant_stats = $conn->prepare($merchant_stats_sql);
-    $merchant_stats->execute([$filter_date]);
+    $merchant_stats->execute([$filter_date, $filter_date_end]);
     $merchant_stats_data = $merchant_stats->fetchAll(PDO::FETCH_ASSOC);
     
     // Get total transactions per merchant (both IN and OUT) for comparison
@@ -60,13 +66,13 @@ try {
             SUM(CASE WHEN LogType = 'OUT' THEN Amount ELSE 0 END) as out_amount,
             SUM(CASE WHEN LogType = 'IN' THEN Amount ELSE 0 END) as in_amount
         FROM MerchantLogs 
-        WHERE CAST(LogDate as DATE) = ?
+        WHERE CAST(LogDate as DATE) BETWEEN ? AND ?
         GROUP BY MerchantName
         ORDER BY total_count DESC
     ";
     
     $total_merchant_stats = $conn->prepare($total_merchant_stats_sql);
-    $total_merchant_stats->execute([$filter_date]);
+    $total_merchant_stats->execute([$filter_date, $filter_date_end]);
     $total_merchant_data = $total_merchant_stats->fetchAll(PDO::FETCH_ASSOC);
     
     // Get hourly trends for OUT transactions only with amounts
@@ -76,13 +82,13 @@ try {
             COUNT(*) as out_count,
             SUM(l.Amount) as out_amount
         FROM MerchantLogs l
-        WHERE CAST(l.LogDate as DATE) = ? AND l.LogType = 'OUT'
+        WHERE CAST(l.LogDate as DATE) BETWEEN ? AND ? AND l.LogType = 'OUT'
         GROUP BY DATEPART(HOUR, l.LogDate)
         ORDER BY hour
     ";
     
     $hourly_data = $conn->prepare($hourly_sql);
-    $hourly_data->execute([$filter_date]);
+    $hourly_data->execute([$filter_date, $filter_date_end]);
     $hourly_data = $hourly_data->fetchAll(PDO::FETCH_ASSOC);
     
     // Get recent OUT logs for the filtered period
@@ -117,14 +123,25 @@ try {
 } catch (PDOException $e) {
     die("Error: " . $e->getMessage());
 }
+
+// Prepare data for export
+$export_data = [
+    'date_range' => $filter_date . ' to ' . $filter_date_end,
+    'stats' => $stats,
+    'merchants' => $merchant_stats_data,
+    'hourly_data' => $hourly_data
+];
 ?>
 
 <div id="malpay" class="tab-content active">
     <!-- Filters -->
     <div class="filters">
         <div class="filter-group">
-            <label for="filterDate">Date:</label>
+            <label for="filterDate">Start Date:</label>
             <input type="date" id="filterDate" name="filterDate" value="<?php echo htmlspecialchars($filter_date); ?>">
+            
+            <label for="filterDateEnd">End Date:</label>
+            <input type="date" id="filterDateEnd" name="filterDateEnd" value="<?php echo htmlspecialchars($filter_date_end); ?>">
             
             <label for="filterMerchant">Merchant:</label>
             <select id="filterMerchant" name="filterMerchant">
@@ -138,8 +155,10 @@ try {
             
             <button class="filter-btn" id="applyFilter">Apply Filters</button>
             
-            <div class="tab-timer">
-                🔄 Auto-switch: Off
+            <div class="export-buttons">
+                <button class="export-btn" id="printReport">📄 Print Report</button>
+                <button class="export-btn" id="exportPDF">📊 Export PDF</button>
+                <button class="export-btn" id="exportCSV">📋 Export CSV</button>
             </div>
         </div>
     </div>
@@ -148,31 +167,31 @@ try {
     <div class="stats-grid">
         <div class="stat-card total">
             <h3>Completed Transactions</h3>
-            <div class="stat-number stat-total"><?php echo number_format($stats['total_out_logs']); ?></div>
+            <div class="stat-number"><?php echo number_format($stats['total_out_logs']); ?></div>
             <p>Successful OUT logs</p>
         </div>
         
         <div class="stat-card success">
             <h3>Total Amount</h3>
-            <div class="stat-number stat-success">MK<?php echo number_format($stats['total_amount'] ?? 0, 2); ?></div>
+            <div class="stat-number">MK<?php echo number_format($stats['total_amount'] ?? 0, 2); ?></div>
             <p>From completed transactions</p>
         </div>
         
         <div class="stat-card pending">
             <h3>Avg Response Time</h3>
-            <div class="stat-number stat-pending"><?php echo number_format($stats['avg_response_time'] ?? 0, 2); ?>ms</div>
+            <div class="stat-number"><?php echo number_format($stats['avg_response_time'] ?? 0, 2); ?>ms</div>
             <p>Processing time</p>
         </div>
         
         <div class="stat-card incomplete">
             <h3>Active Merchants</h3>
-            <div class="stat-number stat-incomplete"><?php echo number_format(count($merchant_stats_data)); ?></div>
+            <div class="stat-number"><?php echo number_format(count($merchant_stats_data)); ?></div>
             <p>With completed transactions</p>
         </div>
     </div>
 
     <!-- Merchant Analytics -->
-    <h3 class="chart-title">Merchant Performance - <?php echo date('M j, Y', strtotime($filter_date)); ?></h3>
+    <h3 class="section-title">Merchant Performance - <?php echo date('M j, Y', strtotime($filter_date)); echo $filter_date !== $filter_date_end ? ' to ' . date('M j, Y', strtotime($filter_date_end)) : ''; ?></h3>
     <div class="merchant-grid">
         <?php foreach($merchant_stats_data as $merchant): 
             // Find total transactions for this merchant for comparison
@@ -225,19 +244,19 @@ try {
     <!-- Charts -->
     <div class="charts-grid">
         <div class="chart-container">
-            <h3 class="chart-title">Completed Transactions by Hour</h3>
+            <h3 class="section-title">Completed Transactions by Hour</h3>
             <canvas id="malpayHourlyChart" height="300"></canvas>
         </div>
         
         <div class="chart-container">
-            <h3 class="chart-title">Transaction Amount by Merchant</h3>
+            <h3 class="section-title">Transaction Amount by Merchant</h3>
             <canvas id="malpayMerchantChart" height="300"></canvas>
         </div>
     </div>
 
     <!-- Recent Completed Transactions -->
     <div class="recent-transactions">
-        <h3 class="chart-title">Recent Completed Transactions - <?php echo date('M j, Y', strtotime($filter_date)); ?></h3>
+        <h3 class="section-title" color="black">Recent Completed Transactions - <?php echo date('M j, Y', strtotime($filter_date)); echo $filter_date !== $filter_date_end ? ' to ' . date('M j, Y', strtotime($filter_date_end)) : ''; ?></h3>
         <div class="table-container">
             <table>
                 <thead>
@@ -279,10 +298,53 @@ try {
     </div>
 </div>
 
+<!-- Hidden div for export data -->
+<div id="exportData" style="display: none;" data-export='<?php echo json_encode($export_data); ?>'></div>
+
 <script>
-// MALPAY Charts
+// Filter functionality
 document.addEventListener('DOMContentLoaded', function() {
-    // Hourly Trends Chart - OUT transactions only
+    // Apply filter button
+    document.getElementById('applyFilter').addEventListener('click', function() {
+        const date = document.getElementById('filterDate').value;
+        const dateEnd = document.getElementById('filterDateEnd').value;
+        const merchant = document.getElementById('filterMerchant').value;
+        
+        const params = new URLSearchParams({
+            date: date,
+            date_end: dateEnd,
+            merchant: merchant
+        });
+        
+        window.location.href = '?' + params.toString();
+    });
+
+    // Enter key support for filters
+    [document.getElementById('filterDate'), document.getElementById('filterDateEnd'), document.getElementById('filterMerchant')]
+        .forEach(element => {
+            element.addEventListener('keypress', function(e) {
+                if (e.key === 'Enter') {
+                    document.getElementById('applyFilter').click();
+                }
+            });
+        });
+
+    // Export functionality
+    document.getElementById('printReport').addEventListener('click', function() {
+        window.print();
+    });
+
+    document.getElementById('exportPDF').addEventListener('click', function() {
+        alert('PDF export would be generated here. This would require a server-side PDF generation library.');
+        // In a real implementation, this would make an AJAX call to generate PDF
+    });
+
+    document.getElementById('exportCSV').addEventListener('click', function() {
+        const exportData = JSON.parse(document.getElementById('exportData').dataset.export);
+        exportToCSV(exportData);
+    });
+
+    // MALPAY Charts
     const hourlyCtx = document.getElementById('malpayHourlyChart').getContext('2d');
     new Chart(hourlyCtx, {
         type: 'bar',
@@ -366,9 +428,118 @@ document.addEventListener('DOMContentLoaded', function() {
         }
     });
 });
+
+// CSV Export function
+function exportToCSV(data) {
+    let csvContent = "data:text/csv;charset=utf-8,";
+    
+    // Header
+    csvContent += "MalPay Transaction Report," + data.date_range + "\n\n";
+    
+    // Summary Statistics
+    csvContent += "SUMMARY STATISTICS\n";
+    csvContent += "Completed Transactions," + (data.stats.total_out_logs || 0) + "\n";
+    csvContent += "Total Amount,MK" + (data.stats.total_amount ? Number(data.stats.total_amount).toFixed(2) : '0.00') + "\n";
+    csvContent += "Average Response Time," + (data.stats.avg_response_time ? Number(data.stats.avg_response_time).toFixed(2) + 'ms' : '0ms') + "\n";
+    csvContent += "Active Merchants," + data.merchants.length + "\n\n";
+    
+    // Merchant Data
+    csvContent += "MERCHANT PERFORMANCE\n";
+    csvContent += "Merchant,Completed Transactions,Total Amount,Success Rate\n";
+    
+    data.merchants.forEach(merchant => {
+        csvContent += `"${merchant.MerchantName}",${merchant.out_count},MK${Number(merchant.total_amount).toFixed(2)}\n`;
+    });
+    
+    csvContent += "\n";
+    
+    // Hourly Data
+    csvContent += "HOURLY BREAKDOWN\n";
+    csvContent += "Hour,Completed Transactions,Total Amount\n";
+    
+    data.hourly_data.forEach(hour => {
+        csvContent += `${hour.hour}:00,${hour.out_count},MK${Number(hour.out_amount).toFixed(2)}\n`;
+    });
+    
+    // Create download link
+    const encodedUri = encodeURI(csvContent);
+    const link = document.createElement("a");
+    link.setAttribute("href", encodedUri);
+    link.setAttribute("download", `malpay_report_${data.date_range.replace(' to ', '_')}.csv`);
+    document.body.appendChild(link);
+    
+    link.click();
+    document.body.removeChild(link);
+}
+
+// Print styles
+function applyPrintStyles() {
+    const style = document.createElement('style');
+    style.innerHTML = `
+        @media print {
+            .filters, .export-buttons, button {
+                display: none !important;
+            }
+            .section-title {
+                color: #000 !important;
+                font-weight: bold;
+            }
+            .stat-card {
+                break-inside: avoid;
+            }
+            .merchant-grid {
+                display: block !important;
+            }
+            .merchant-card {
+                margin-bottom: 10px;
+                break-inside: avoid;
+            }
+        }
+    `;
+    document.head.appendChild(style);
+}
+
+applyPrintStyles();
 </script>
 
 <style>
+.section-title {
+    color: #ffffff;
+    margin: 20px 0 15px 0;
+    font-size: 1.4em;
+    font-weight: 600;
+    text-shadow: 1px 1px 2px rgba(0,0,0,0.3);
+}
+
+.stat-number {
+    font-size: 1.8em;
+    font-weight: bold;
+    margin: 10px 0;
+    word-break: break-word;
+    overflow-wrap: break-word;
+}
+
+.export-buttons {
+    display: flex;
+    gap: 10px;
+    margin-left: 20px;
+}
+
+.export-btn {
+    padding: 8px 15px;
+    background: #6c757d;
+    color: white;
+    border: none;
+    border-radius: 5px;
+    cursor: pointer;
+    font-size: 0.9em;
+    transition: background 0.3s;
+}
+
+.export-btn:hover {
+    background: #5a6268;
+}
+
 .success-rate {
     padding: 2px 8px;
     border-radius: 12px;
@@ -393,7 +564,7 @@ document.addEventListener('DOMContentLoaded', function() {
 
 .merchant-header {
     display: flex;
-    justify-content: between;
+    justify-content: space-between;
     align-items: center;
     margin-bottom: 10px;
 }
@@ -401,5 +572,34 @@ document.addEventListener('DOMContentLoaded', function() {
 .merchant-name {
     flex: 1;
     font-weight: bold;
+}
+
+/* Ensure cards don't overflow */
+.stat-card {
+    min-height: 120px;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+}
+
+.merchant-card {
+    min-height: 140px;
+}
+
+/* Responsive design */
+@media (max-width: 768px) {
+    .filters .filter-group {
+        flex-direction: column;
+        gap: 10px;
+    }
+    
+    .export-buttons {
+        margin-left: 0;
+        justify-content: center;
+    }
+    
+    .stat-number {
+        font-size: 1.5em;
+    }
 }
 </style>
