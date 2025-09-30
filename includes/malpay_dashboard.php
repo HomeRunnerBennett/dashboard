@@ -176,6 +176,33 @@ try {
     $recent_logs->execute($params);
     $recent_logs = $recent_logs->fetchAll(PDO::FETCH_ASSOC);
     
+    // Get recent failed OUT logs (MetaData doesn't start with "Total response time")
+    $recent_failed_sql = "
+        SELECT TOP 20 
+            l.LogId,
+            l.RequestCode,
+            l.Amount,
+            l.LogDate,
+            l.MSISDN,
+            l.LogType,
+            l.ServiceProvider,
+            l.MerchantName,
+            l.BatchCode,
+            l.MerchantIdentifier,
+            l.AccountNumber,
+            l.MetaData,
+            l.ReponseTime
+        FROM MerchantLogs l
+        WHERE CAST(l.LogDate as DATE) BETWEEN ? AND ? 
+        AND l.LogType = 'OUT' 
+        AND l.MetaData NOT LIKE 'Total response time%'
+        ORDER BY l.LogDate DESC
+    ";
+    
+    $recent_failed_logs = $conn->prepare($recent_failed_sql);
+    $recent_failed_logs->execute([$filter_date, $filter_date_end]);
+    $recent_failed_logs = $recent_failed_logs->fetchAll(PDO::FETCH_ASSOC);
+    
     // Get unique merchants for filter dropdown
     $merchants_sql = "SELECT DISTINCT MerchantName FROM MerchantLogs ORDER BY MerchantName";
     $merchants = $conn->query($merchants_sql)->fetchAll(PDO::FETCH_COLUMN);
@@ -197,7 +224,8 @@ $export_data = [
     'merchants' => $merchant_stats_data,
     'failed_merchants' => $failed_merchant_data,
     'hourly_data' => $hourly_data,
-    'hourly_failed_data' => $hourly_failed_data
+    'hourly_failed_data' => $hourly_failed_data,
+    'recent_failed_logs' => $recent_failed_logs
 ];
 ?>
 
@@ -370,6 +398,57 @@ $export_data = [
                         </td>
                     </tr>
                     <?php endforeach; ?>
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    <!-- Recent Failed Transactions -->
+    <div class="recent-transactions">
+        <h3 class="section-title">Recent Failed OUT Transactions (Invalid MetaData) - <?php echo date('M j, Y', strtotime($filter_date)); echo $filter_date !== $filter_date_end ? ' to ' . date('M j, Y', strtotime($filter_date_end)) : ''; ?></h3>
+        <div class="table-container">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Log ID</th>
+                        <th>Request Code</th>
+                        <th>Amount</th>
+                        <th>Time</th>
+                        <th>Merchant</th>
+                        <th>Account</th>
+                        <th>Response Time</th>
+                        <th>Log</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <?php if (!empty($recent_failed_logs)): ?>
+                        <?php foreach($recent_failed_logs as $log): ?>
+                        <tr>
+                            <td><?php echo htmlspecialchars($log['LogId']); ?></td>
+                            <td><?php echo htmlspecialchars($log['RequestCode']); ?></td>
+                            <td>MK<?php echo number_format($log['Amount'], 2); ?></td>
+                            <td><?php echo date('H:i:s', strtotime($log['LogDate'])); ?></td>
+                            <td><?php echo htmlspecialchars($log['MerchantName']); ?></td>
+                            <td><?php echo htmlspecialchars($log['AccountNumber'] ?? 'N/A'); ?></td>
+                            <td><?php echo number_format($log['ReponseTime'], 2); ?>ms</td>
+                            <td>
+                                <?php if (!empty($log['MetaData'])): ?>
+                                <button onclick="showMetadata(`<?php echo addslashes($log['MetaData']); ?>`)">
+                                    View
+                                </button>
+                                <?php else: ?>
+                                <em>No log</em>
+                                <?php endif; ?>
+                            </td>
+                        </tr>
+                        <?php endforeach; ?>
+                    <?php else: ?>
+                        <tr>
+                            <td colspan="8" style="text-align: center; color: #7f8c8d; padding: 20px;">
+                                No failed OUT transactions found for the selected date range.
+                            </td>
+                        </tr>
+                    <?php endif; ?>
                 </tbody>
             </table>
         </div>
@@ -559,6 +638,16 @@ function exportToCSV(data, dashboardType) {
         csvContent += `${hour.hour}:00,${hour.out_count},${failedCount}\n`;
     });
     
+    csvContent += "\n";
+    
+    // Failed Transactions Data
+    csvContent += "RECENT FAILED OUT TRANSACTIONS (INVALID METADATA)\n";
+    csvContent += "Log ID,Request Code,Amount,Time,Merchant,Account,Response Time,MetaData\n";
+    
+    data.recent_failed_logs.forEach(log => {
+        csvContent += `"${log.LogId}","${log.RequestCode}",MK${Number(log.Amount).toFixed(2)},"${log.LogDate}","${log.MerchantName}","${log.AccountNumber || 'N/A'}","${log.ReponseTime}ms","${log.MetaData}"\n`;
+    });
+    
     // Create download link
     const encodedUri = encodeURI(csvContent);
     const link = document.createElement("a");
@@ -599,141 +688,3 @@ function applyPrintStyles() {
 
 applyPrintStyles();
 </script>
-
-<style>
-.section-title {
-    color: #ffffff;
-    margin: 20px 0 15px 0;
-    font-size: 1.4em;
-    font-weight: 600;
-    text-shadow: 1px 1px 2px rgba(0,0,0,0.3);
-}
-
-.stat-number {
-    font-size: 1.4em;
-    font-weight: bold;
-    margin: 10px 0;
-    word-break: break-word;
-    overflow-wrap: break-word;
-    line-height: 1.2;
-}
-
-.small-amount {
-    font-size: 1.1em !important;
-}
-
-.stat-card.amount .stat-number {
-    font-size: 1.3em;
-}
-
-.export-buttons {
-    display: flex;
-    gap: 10px;
-    margin-left: 20px;
-}
-
-.export-btn {
-    padding: 8px 15px;
-    background: #6c757d;
-    color: white;
-    border: none;
-    border-radius: 5px;
-    cursor: pointer;
-    font-size: 0.9em;
-    transition: background 0.3s;
-}
-
-.export-btn:hover {
-    background: #5a6268;
-}
-
-.success-rate {
-    padding: 2px 8px;
-    border-radius: 12px;
-    font-size: 12px;
-    font-weight: bold;
-}
-
-.success-rate.high {
-    background: #d4edda;
-    color: #155724;
-}
-
-.success-rate.medium {
-    background: #fff3cd;
-    color: #856404;
-}
-
-.success-rate.low {
-    background: #f8d7da;
-    color: #721c24;
-}
-
-.merchant-header {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    margin-bottom: 10px;
-}
-
-.merchant-name {
-    flex: 1;
-    font-weight: bold;
-}
-
-/* Ensure cards don't overflow */
-.stat-card {
-    min-height: 120px;
-    display: flex;
-    flex-direction: column;
-    justify-content: center;
-    padding: 15px;
-}
-
-.merchant-card {
-    min-height: 140px;
-    padding: 15px;
-}
-
-.stat-item .stat-value {
-    font-size: 1.1em;
-    font-weight: bold;
-    margin-bottom: 5px;
-}
-
-/* Responsive design */
-@media (max-width: 768px) {
-    .filters .filter-group {
-        flex-direction: column;
-        gap: 10px;
-    }
-    
-    .export-buttons {
-        margin-left: 0;
-        justify-content: center;
-        flex-wrap: wrap;
-    }
-    
-    .stat-number {
-        font-size: 1.2em;
-    }
-    
-    .stat-card.amount .stat-number {
-        font-size: 1.1em;
-    }
-}
-
-@media (max-width: 480px) {
-    .stat-number {
-        font-size: 1.1em;
-    }
-    
-    .stat-card.amount .stat-number {
-        font-size: 1em;
-    }
-    
-    .small-amount {
-        font-size: 0.9em !important;
-    }
-}
-</style>
