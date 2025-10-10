@@ -1,195 +1,400 @@
-// Chart initialization and tab functionality
-document.addEventListener('DOMContentLoaded', function() {
-    let currentTab = 'malpay';
-    let tabTimer = null;
-    const switchInterval = 300000; // 5 minutes in milliseconds (300,000 ms)
-    let timeUntilSwitch = switchInterval / 1000; // Convert to seconds for display
+// Global variables to track current state
+let currentTab = 'malpay';
+let currentFilters = {
+    date: new Date().toISOString().split('T')[0],
+    date_end: new Date().toISOString().split('T')[0],
+    merchant: 'all',
+    status: 'all'
+};
 
-    // Initialize MALPAY as active tab
-    activateTab('malpay');
+// Initialize the dashboard
+document.addEventListener('DOMContentLoaded', function() {
+    initializeDashboard();
+    setupEventListeners();
+    loadInitialState();
+});
+
+function initializeDashboard() {
+    console.log('Initializing dashboard...');
     
-    // Tab switching
-    const tabs = document.querySelectorAll('.tab');
+    // Set initial active tab based on URL or localStorage
+    const urlParams = new URLSearchParams(window.location.search);
+    const tabFromUrl = urlParams.get('tab');
+    const savedTab = localStorage.getItem('currentTab');
     
-    tabs.forEach(tab => {
-        tab.addEventListener('click', (event) => {
-            event.preventDefault();
-            const tabName = tab.getAttribute('data-tab');
-            activateTab(tabName);
-            resetTabTimer();
+    if (tabFromUrl) {
+        currentTab = tabFromUrl;
+    } else if (savedTab) {
+        currentTab = savedTab;
+    }
+    
+    // Show the correct tab
+    showTab(currentTab);
+    
+    // Load saved filters
+    loadSavedFilters();
+    
+    // Apply initial filters
+    applyFilters();
+}
+
+function setupEventListeners() {
+    // Tab navigation
+    document.querySelectorAll('.tab').forEach(tab => {
+        tab.addEventListener('click', function() {
+            const tabName = this.getAttribute('data-tab');
+            showTab(tabName);
+            saveCurrentState();
         });
     });
     
-    // Refresh button functionality
-    document.getElementById('refreshBtn').addEventListener('click', function() {
-        location.reload();
+    // Filter inputs - using event delegation for dynamic elements
+    document.addEventListener('change', function(e) {
+        if (e.target.matches('#filterDate, #filterDateEnd, #filterMerchant, #filterStatus')) {
+            updateFilters();
+        }
     });
     
-    // Filter functionality
-    initializeFilters();
-    
-    // Start tab rotation timer
-    startTabRotation();
-    
-    // Initialize countdown display
-    updateCountdownDisplay();
-    
-    // Initialize charts
-    initializeCharts();
-});
-
-function activateTab(tabName) {
-    // Remove active class from all tabs and contents
-    document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
-    document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
-    
-    // Add active class to clicked tab and corresponding content
-    document.querySelector(`[data-tab="${tabName}"]`).classList.add('active');
-    document.getElementById(tabName).classList.add('active');
-    
-    // Update tab timer display
-    updateTabTimerDisplay(tabName);
-    
-    // Refresh charts when switching tabs
-    setTimeout(initializeCharts, 100);
-    
-    console.log(`Switched to ${tabName.toUpperCase()} tab`);
-}
-
-function startTabRotation() {
-    tabTimer = setInterval(() => {
-        const currentTab = document.querySelector('.tab.active').getAttribute('data-tab');
-        const tabs = Array.from(document.querySelectorAll('.tab'));
-        const currentIndex = tabs.findIndex(tab => tab.getAttribute('data-tab') === currentTab);
-        const nextIndex = (currentIndex + 1) % tabs.length;
-        const nextTab = tabs[nextIndex].getAttribute('data-tab');
-        
-        console.log(`Auto-switching from ${currentTab} to ${nextTab}`);
-        activateTab(nextTab);
-        resetCountdown();
-    }, 300000); // 5 minutes
-}
-
-function resetTabTimer() {
-    if (tabTimer) {
-        clearInterval(tabTimer);
-        startTabRotation();
-        resetCountdown();
-        console.log('Tab timer reset by manual switch');
-    }
-}
-
-function resetCountdown() {
-    timeUntilSwitch = 300; // Reset to 5 minutes in seconds
-    updateCountdownDisplay();
-}
-
-function updateCountdownDisplay() {
-    // Update countdown every second
-    setInterval(() => {
-        if (timeUntilSwitch > 0) {
-            timeUntilSwitch--;
-            
-            const minutes = Math.floor(timeUntilSwitch / 60);
-            const seconds = timeUntilSwitch % 60;
-            
-            const timerDisplay = document.querySelector('.tab-timer');
-            if (timerDisplay) {
-                const currentTab = document.querySelector('.tab.active').getAttribute('data-tab');
-                const nextTab = currentTab === 'npms' ? 'MALPAY' : 'NPMS';
-                timerDisplay.innerHTML = `🔄 Auto-switch to ${nextTab} in ${minutes}:${seconds.toString().padStart(2, '0')}`;
-            }
+    // Apply filter button
+    document.addEventListener('click', function(e) {
+        if (e.target.matches('#applyFilter')) {
+            applyFilters();
         }
-    }, 1000);
-}
-
-function updateTabTimerDisplay(currentTab) {
-    const timerDisplay = document.querySelector('.tab-timer');
-    if (timerDisplay) {
-        const nextTab = currentTab === 'npms' ? 'MALPAY' : 'NPMS';
-        timerDisplay.innerHTML = `🔄 Auto-switch to ${nextTab} in 5:00`;
-    }
-}
-
-function initializeFilters() {
-    const filterBtn = document.getElementById('applyFilter');
-    if (filterBtn) {
-        filterBtn.addEventListener('click', applyFilters);
-    }
+    });
     
-    // Set default date to today
-    const today = new Date().toISOString().split('T')[0];
+    // Enter key in filter inputs
+    document.addEventListener('keypress', function(e) {
+        if (e.target.matches('#filterDate, #filterDateEnd, #filterMerchant, #filterStatus') && e.key === 'Enter') {
+            applyFilters();
+        }
+    });
+    
+    // Handle browser back/forward buttons
+    window.addEventListener('popstate', function(event) {
+        const urlParams = new URLSearchParams(window.location.search);
+        const tab = urlParams.get('tab') || 'malpay';
+        const date = urlParams.get('date') || currentFilters.date;
+        const date_end = urlParams.get('date_end') || currentFilters.date_end;
+        const merchant = urlParams.get('merchant') || 'all';
+        const status = urlParams.get('status') || 'all';
+        
+        currentTab = tab;
+        currentFilters = { date, date_end, merchant, status };
+        
+        showTab(currentTab);
+        updateFilterInputs();
+        applyFilters(false); // Don't push state to avoid loop
+    });
+}
+
+function loadInitialState() {
+    const urlParams = new URLSearchParams(window.location.search);
+    
+    // Load filters from URL
+    const date = urlParams.get('date');
+    const date_end = urlParams.get('date_end');
+    const merchant = urlParams.get('merchant');
+    const status = urlParams.get('status');
+    
+    if (date) currentFilters.date = date;
+    if (date_end) currentFilters.date_end = date_end;
+    if (merchant) currentFilters.merchant = merchant;
+    if (status) currentFilters.status = status;
+    
+    updateFilterInputs();
+}
+
+function loadSavedFilters() {
+    const savedFilters = localStorage.getItem('dashboardFilters');
+    if (savedFilters) {
+        try {
+            const filters = JSON.parse(savedFilters);
+            currentFilters = { ...currentFilters, ...filters };
+            updateFilterInputs();
+        } catch (e) {
+            console.error('Error loading saved filters:', e);
+        }
+    }
+}
+
+function updateFilters() {
     const dateInput = document.getElementById('filterDate');
-    if (dateInput) {
-        dateInput.value = today;
+    const dateEndInput = document.getElementById('filterDateEnd');
+    const merchantInput = document.getElementById('filterMerchant');
+    const statusInput = document.getElementById('filterStatus');
+    
+    if (dateInput) currentFilters.date = dateInput.value;
+    if (dateEndInput) currentFilters.date_end = dateEndInput.value;
+    if (merchantInput) currentFilters.merchant = merchantInput.value;
+    if (statusInput) currentFilters.status = statusInput.value;
+    
+    // Validate date range
+    if (currentFilters.date_end < currentFilters.date) {
+        currentFilters.date_end = currentFilters.date;
+        if (dateEndInput) dateEndInput.value = currentFilters.date_end;
+    }
+    
+    saveCurrentState();
+}
+
+function updateFilterInputs() {
+    const dateInput = document.getElementById('filterDate');
+    const dateEndInput = document.getElementById('filterDateEnd');
+    const merchantInput = document.getElementById('filterMerchant');
+    const statusInput = document.getElementById('filterStatus');
+    
+    if (dateInput) dateInput.value = currentFilters.date;
+    if (dateEndInput) dateEndInput.value = currentFilters.date_end;
+    if (merchantInput && currentFilters.merchant) {
+        merchantInput.value = currentFilters.merchant;
+    }
+    if (statusInput && currentFilters.status) {
+        statusInput.value = currentFilters.status;
     }
 }
 
-function applyFilters() {
-    const date = document.getElementById('filterDate').value;
-    const merchant = document.getElementById('filterMerchant').value;
+function applyFilters(pushState = true) {
+    console.log('Applying filters:', currentFilters);
     
-    // Reload page with filter parameters
-    const params = new URLSearchParams();
-    if (date) params.set('date', date);
-    if (merchant) params.set('merchant', merchant);
+    // Update URL with current state
+    const urlParams = new URLSearchParams();
+    urlParams.set('tab', currentTab);
+    urlParams.set('date', currentFilters.date);
+    urlParams.set('date_end', currentFilters.date_end);
     
-    window.location.href = window.location.pathname + '?' + params.toString();
+    if (currentTab === 'malpay' && currentFilters.merchant !== 'all') {
+        urlParams.set('merchant', currentFilters.merchant);
+    }
+    
+    if (currentTab === 'npms' && currentFilters.status !== 'all') {
+        urlParams.set('status', currentFilters.status);
+    }
+    
+    const newUrl = `${window.location.pathname}?${urlParams.toString()}`;
+    
+    if (pushState) {
+        window.history.pushState({ tab: currentTab, filters: currentFilters }, '', newUrl);
+    }
+    
+    // Save to localStorage
+    localStorage.setItem('currentTab', currentTab);
+    localStorage.setItem('dashboardFilters', JSON.stringify(currentFilters));
+    
+    // Reload the page to apply filters
+    window.location.href = newUrl;
 }
 
-function showMetadata(metadata) {
-    // Create a modal-like popup
-    const popup = document.createElement('div');
-    popup.style.position = 'fixed';
-    popup.style.top = '50%';
-    popup.style.left = '50%';
-    popup.style.transform = 'translate(-50%, -50%)';
-    popup.style.background = 'white';
-    popup.style.padding = '20px';
-    popup.style.borderRadius = '10px';
-    popup.style.boxShadow = '0 10px 30px rgba(0,0,0,0.3)';
-    popup.style.zIndex = '1000';
-    popup.style.maxWidth = '80%';
-    popup.style.maxHeight = '80%';
-    popup.style.overflow = 'auto';
+function showTab(tabName) {
+    console.log('Showing tab:', tabName);
     
-    popup.innerHTML = `
-        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px;">
-            <h3 style="margin: 0; color: #2c9caf;">Transaction Log Details</h3>
-            <button onclick="this.parentElement.parentElement.remove(); document.querySelector('.modal-overlay').remove();" style="background: #2c9caf; color: white; border: none; padding: 5px 10px; border-radius: 5px; cursor: pointer;">Close</button>
-        </div>
-        <div class="metadata-popup">
-            <pre style="white-space: pre-wrap; word-wrap: break-word;">${metadata}</pre>
-        </div>
+    // Hide all tab contents
+    document.querySelectorAll('.tab-content').forEach(tab => {
+        tab.classList.remove('active');
+    });
+    
+    // Remove active class from all tabs
+    document.querySelectorAll('.tab').forEach(tab => {
+        tab.classList.remove('active');
+    });
+    
+    // Show the selected tab content
+    const activeTabContent = document.getElementById(tabName);
+    if (activeTabContent) {
+        activeTabContent.classList.add('active');
+    }
+    
+    // Activate the selected tab
+    const activeTab = document.querySelector(`.tab[data-tab="${tabName}"]`);
+    if (activeTab) {
+        activeTab.classList.add('active');
+    }
+    
+    currentTab = tabName;
+    
+    // Update filter visibility based on tab
+    updateFilterVisibility();
+    
+    // Dispatch custom event for tab change
+    window.dispatchEvent(new CustomEvent('tabChanged', { 
+        detail: { tabName: tabName }
+    }));
+}
+
+function updateFilterVisibility() {
+    const merchantFilter = document.querySelector('.filter-group label[for="filterMerchant"]');
+    const merchantSelect = document.getElementById('filterMerchant');
+    const statusFilter = document.querySelector('.filter-group label[for="filterStatus"]');
+    const statusSelect = document.getElementById('filterStatus');
+    
+    if (merchantFilter && merchantSelect) {
+        if (currentTab === 'malpay') {
+            merchantFilter.style.display = '';
+            merchantSelect.style.display = '';
+        } else {
+            merchantFilter.style.display = 'none';
+            merchantSelect.style.display = 'none';
+        }
+    }
+    
+    if (statusFilter && statusSelect) {
+        if (currentTab === 'npms') {
+            statusFilter.style.display = '';
+            statusSelect.style.display = '';
+        } else {
+            statusFilter.style.display = 'none';
+            statusSelect.style.display = 'none';
+        }
+    }
+}
+
+function saveCurrentState() {
+    localStorage.setItem('currentTab', currentTab);
+    localStorage.setItem('dashboardFilters', JSON.stringify(currentFilters));
+}
+
+// Utility functions for metadata and response modals
+function showMetadata(metadata) {
+    showModal('Transaction Metadata', metadata);
+}
+
+function showResponse(response) {
+    showModal('Response Message', response);
+}
+
+function showModal(title, content) {
+    // Remove existing modal if any
+    const existingModal = document.getElementById('customModal');
+    if (existingModal) {
+        existingModal.remove();
+    }
+    
+    // Create modal
+    const modal = document.createElement('div');
+    modal.id = 'customModal';
+    modal.style.cssText = `
+        position: fixed;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        background: rgba(0,0,0,0.5);
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        z-index: 10000;
     `;
     
-    document.body.appendChild(popup);
+    const modalContent = document.createElement('div');
+    modalContent.style.cssText = `
+        background: white;
+        padding: 20px;
+        border-radius: 8px;
+        max-width: 90%;
+        max-height: 90%;
+        overflow: auto;
+        box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+    `;
     
-    // Add overlay
-    const overlay = document.createElement('div');
-    overlay.className = 'modal-overlay';
-    overlay.style.position = 'fixed';
-    overlay.style.top = '0';
-    overlay.style.left = '0';
-    overlay.style.width = '100%';
-    overlay.style.height = '100%';
-    overlay.style.background = 'rgba(0,0,0,0.5)';
-    overlay.style.zIndex = '999';
-    overlay.onclick = function() {
-        popup.remove();
-        overlay.remove();
+    const modalTitle = document.createElement('h3');
+    modalTitle.textContent = title;
+    modalTitle.style.marginTop = '0';
+    
+    const modalBody = document.createElement('div');
+    modalBody.style.cssText = `
+        margin: 20px 0;
+        max-height: 400px;
+        overflow: auto;
+        font-family: monospace;
+        white-space: pre-wrap;
+        background: #f8f9fa;
+        padding: 15px;
+        border-radius: 4px;
+        border: 1px solid #e9ecef;
+    `;
+    modalBody.textContent = content;
+    
+    const closeButton = document.createElement('button');
+    closeButton.textContent = 'Close';
+    closeButton.style.cssText = `
+        background: #6c757d;
+        color: white;
+        border: none;
+        padding: 8px 16px;
+        border-radius: 4px;
+        cursor: pointer;
+        float: right;
+    `;
+    closeButton.onclick = function() {
+        modal.remove();
     };
     
-    document.body.appendChild(overlay);
+    modalContent.appendChild(modalTitle);
+    modalContent.appendChild(modalBody);
+    modalContent.appendChild(closeButton);
+    modal.appendChild(modalContent);
+    
+    // Close modal when clicking outside
+    modal.onclick = function(e) {
+        if (e.target === modal) {
+            modal.remove();
+        }
+    };
+    
+    document.body.appendChild(modal);
 }
 
-function initializeCharts() {
-    // Chart initialization will be handled by PHP-generated JavaScript
-    console.log('Charts initialized for active tab');
+// Export to PDF function
+function exportToPDF(dashboardType) {
+    const exportDataElement = document.getElementById(`exportData${dashboardType.charAt(0).toUpperCase() + dashboardType.slice(1)}`);
+    if (!exportDataElement) return;
+    
+    const exportData = JSON.parse(exportDataElement.dataset.export);
+    
+    // Create a form and submit it to the PDF generation endpoint
+    const form = document.createElement('form');
+    form.method = 'POST';
+    form.action = 'generate_pdf.php';
+    
+    const input = document.createElement('input');
+    input.type = 'hidden';
+    input.name = 'export_data';
+    input.value = JSON.stringify(exportData);
+    form.appendChild(input);
+    
+    const dashboardInput = document.createElement('input');
+    dashboardInput.type = 'hidden';
+    dashboardInput.name = 'dashboard';
+    dashboardInput.value = dashboardType;
+    form.appendChild(dashboardInput);
+    
+    document.body.appendChild(form);
+    form.submit();
+    document.body.removeChild(form);
 }
 
-// Auto-refresh data every 5 minutes (separate from tab switching)
-setInterval(() => {
-    console.log('Auto-refreshing data...');
-    document.getElementById('refreshBtn').click();
-}, 300000);
+// Handle page refresh - restore state
+window.addEventListener('beforeunload', function() {
+    saveCurrentState();
+});
+
+// Handle page load - check for URL parameters
+window.addEventListener('load', function() {
+    const urlParams = new URLSearchParams(window.location.search);
+    const tab = urlParams.get('tab');
+    const date = urlParams.get('date');
+    const date_end = urlParams.get('date_end');
+    const merchant = urlParams.get('merchant');
+    const status = urlParams.get('status');
+    
+    if (tab) {
+        currentTab = tab;
+    }
+    
+    if (date) currentFilters.date = date;
+    if (date_end) currentFilters.date_end = date_end;
+    if (merchant) currentFilters.merchant = merchant;
+    if (status) currentFilters.status = status;
+    
+    showTab(currentTab);
+    updateFilterInputs();
+});
