@@ -86,7 +86,38 @@ try {
             background: #0056b3;
         }
         
-        /* Add a spacer to push refresh button to the right */
+        .user-info {
+            display: flex;
+            align-items: center;
+            gap: 15px;
+            margin-left: auto;
+            flex-shrink: 0;
+        }
+        
+        .user-welcome {
+            color: #333;
+            font-weight: 600;
+            white-space: nowrap;
+        }
+        
+        .logout-btn {
+            padding: 8px 20px;
+            background: #e74c3c;
+            color: white;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 14px;
+            font-weight: 600;
+            transition: background 0.3s;
+            white-space: nowrap;
+        }
+        
+        .logout-btn:hover {
+            background: #c0392b;
+        }
+        
+        /* Add a spacer to push user info to the right */
         .header-controls::after {
             content: '';
             flex: 1;
@@ -106,9 +137,13 @@ try {
                 font-size: 12px;
             }
             
-            .refresh-btn {
+            .refresh-btn, .logout-btn {
                 padding: 6px 15px;
                 font-size: 12px;
+            }
+            
+            .user-info {
+                gap: 10px;
             }
         }
         
@@ -129,8 +164,15 @@ try {
                 justify-content: center;
             }
             
-            .refresh-btn {
+            .user-info {
                 order: 2;
+                width: 100%;
+                justify-content: center;
+                margin-left: 0;
+            }
+            
+            .refresh-btn {
+                order: 3;
             }
         }
     </style>
@@ -150,6 +192,11 @@ try {
                         MALPAY: <?php echo $malpay_connected ? '✅ Connected' : '❌ Disconnected'; ?>
                     </div>
                 </div>
+                
+                <div class="user-info">
+                    <span class="user-welcome">Welcome, <?php echo htmlspecialchars($_SESSION['username'] ?? 'User'); ?></span>
+                    <button class="logout-btn" onclick="logout()">Logout</button>
+                </div>
             </div>
         </div>
         
@@ -158,3 +205,11 @@ try {
             <button class="tab active" data-tab="malpay">💳 MALPAY Transaction Analytics</button>
             <div class="tab-timer">🔄 Auto-switch to NPMS in 5:00</div>
         </div>
+
+        <script>
+        function logout() {
+            if (confirm('Are you sure you want to logout?')) {
+                window.location.href = 'logout.php';
+            }
+        }
+        </script>
