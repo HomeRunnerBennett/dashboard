@@ -4,7 +4,7 @@ require_once 'config.php';
 // Increase execution time temporarily to avoid timeout
 ini_set('max_execution_time', 300);
 
-// Get filter parameters - using the new parameter names from script.js
+// Get filter parameters
 $filter_date = $_GET['date'] ?? date('Y-m-d');
 $filter_date_end = $_GET['date_end'] ?? $filter_date;
 $filter_merchant = $_GET['merchant'] ?? 'all';
@@ -217,7 +217,11 @@ $success_rate = $total_out_transactions > 0 ? (($stats['total_out_logs'] ?? 0) /
 
 // ALERT SYSTEM INTEGRATION - Check for failed transactions threshold
 $malpay_failed_count = $failed_stats['failed_out_logs'] ?? 0;
-if ($malpay_failed_count > 5) {
+
+// Only trigger alerts when no date filter is applied (showing today's data by default)
+$is_default_view = (!isset($_GET['date']) && !isset($_GET['date_end']));
+
+if ($malpay_failed_count > 5 && $is_default_view) {
     require_once 'send_alert.php';
     $alert_details = [
         'successful_count' => $stats['total_out_logs'] ?? 0,
@@ -241,35 +245,35 @@ $export_data = [
 ];
 ?>
 
-<div id="malpay" class="tab-content">
+<div id="malpay" class="tab-content active">
     <!-- Filters -->
     <div class="filters">
-        <div class="filter-group">
-            <label for="filterDate">Start Date:</label>
-            <input type="date" id="filterDate" name="filterDate" value="<?php echo htmlspecialchars($filter_date); ?>">
-            
-            <label for="filterDateEnd">End Date:</label>
-            <input type="date" id="filterDateEnd" name="filterDateEnd" value="<?php echo htmlspecialchars($filter_date_end); ?>">
-            
-            <label for="filterMerchant">Merchant:</label>
-            <select id="filterMerchant" name="filterMerchant">
-                <option value="all">All Merchants</option>
-                <?php foreach($merchants as $merchant): ?>
-                    <option value="<?php echo htmlspecialchars($merchant); ?>" <?php echo $filter_merchant === $merchant ? 'selected' : ''; ?>>
-                        <?php echo htmlspecialchars($merchant); ?>
-                    </option>
-                <?php endforeach; ?>
-            </select>
-            
-            <button class="filter-btn" id="applyFilter">Apply Filters</button>
-            
-            <div class="export-buttons">
-                <button class="export-btn" id="printReportMalpay">📄 Print Report</button>
-                <button class="export-btn" id="exportPDFMalpay" onclick="exportToPDF('malpay')">📊 Export PDF</button>
-                <button class="export-btn" id="exportCSVMalpay">📋 Export CSV</button>
-            </div>
+    <div class="filter-group">
+        <label for="malpayFilterDate">Start Date:</label>
+        <input type="date" id="malpayFilterDate" name="malpayFilterDate" value="<?php echo htmlspecialchars($filter_date); ?>">
+        
+        <label for="malpayFilterDateEnd">End Date:</label>
+        <input type="date" id="malpayFilterDateEnd" name="malpayFilterDateEnd" value="<?php echo htmlspecialchars($filter_date_end); ?>">
+        
+        <label for="malpayFilterMerchant">Merchant:</label>
+        <select id="malpayFilterMerchant" name="malpayFilterMerchant">
+            <option value="all">All Merchants</option>
+            <?php foreach($merchants as $merchant): ?>
+                <option value="<?php echo htmlspecialchars($merchant); ?>" <?php echo $filter_merchant === $merchant ? 'selected' : ''; ?>>
+                    <?php echo htmlspecialchars($merchant); ?>
+                </option>
+            <?php endforeach; ?>
+        </select>
+        
+        <button class="filter-btn" id="applyFilterMalpay">Apply Filters</button>
+        
+        <div class="export-buttons">
+            <button class="export-btn" id="printReport">📄 Print Report</button>
+            <button class="export-btn" id="exportPDF" onclick="exportToPDF('malpay')">📊 Export PDF</button>
+            <button class="export-btn" id="exportCSV">📋 Export CSV</button>
         </div>
     </div>
+</div>
 
     <!-- Alert Notification -->
     <?php 
@@ -281,22 +285,11 @@ $export_data = [
     $alertSentToday = !$tracker->shouldSendAlert('malpay', $filter_date, $malpay_failed_count);
     ?>
 
-    <?php if ($showAlert): ?>
+        <?php if ($showAlert): ?>
     <div class="alert-notification">
         <div class="alert-banner warning">
-            <h3>🚨 High Failure Rate Detected</h3>
-            <p>
-                <?php echo $malpay_failed_count; ?> failed OUT transactions detected.
-                <?php if ($alertSentToday): ?>
-                    <br>Alert was already sent to IT and Service Desk teams today.
-                <?php else: ?>
-                    <br>Alert has been sent to IT and Service Desk teams.
-                <?php endif; ?>
-            </p>
-            <p><small>Last checked: <?php echo date('Y-m-d H:i:s'); ?></small></p>
-            <button class="manual-alert-btn" onclick="resendAlert('malpay')">
-                Resend Alert Manually
-            </button>
+            <h3>🚨 Alert: <?php echo $malpay_failed_count; ?> Failed Transactions</h3>
+            <p>High failure rate detected - Team notified</p>
         </div>
     </div>
     <?php endif; ?>
@@ -346,9 +339,17 @@ $export_data = [
                 }
             }
             
-            $success_rate = ($merchant['out_count'] + $failed_for_merchant) > 0 
-                ? ($merchant['out_count'] / ($merchant['out_count'] + $failed_for_merchant)) * 100 
-                : 0;
+            // Also check failed merchant data
+            foreach($failed_merchant_data as $failed_merchant) {
+                if ($failed_merchant['MerchantName'] === $merchant['MerchantName']) {
+                    $failed_for_merchant = $failed_merchant['failed_count'];
+                    break;
+                }
+            }
+            
+            // Calculate success rate
+            $total_out_for_merchant = $merchant['out_count'] + $failed_for_merchant;
+            $success_rate = $total_out_for_merchant > 0 ? ($merchant['out_count'] / $total_out_for_merchant) * 100 : 0;
         ?>
         <div class="merchant-card">
             <div class="merchant-header">
@@ -360,15 +361,21 @@ $export_data = [
             <div class="merchant-stats">
                 <div class="stat-item">
                     <div class="stat-value"><?php echo number_format($merchant['out_count']); ?></div>
-                    <div class="stat-label">Successful OUT</div>
+                    <div class="stat-label">Successful</div>
                 </div>
                 <div class="stat-item">
                     <div class="stat-value"><?php echo number_format($failed_for_merchant); ?></div>
-                    <div class="stat-label">Failed OUT</div>
+                    <div class="stat-label">Failed</div>
                 </div>
                 <div class="stat-item">
-                    <div class="stat-value">MK<?php echo number_format($merchant['total_amount'], 2); ?></div>
-                    <div class="stat-label">Total Amount</div>
+                    <div class="stat-value small-amount">MK<?php echo number_format($merchant['total_amount'], 2); ?></div>
+                    <div class="stat-label">Amount</div>
+                </div>
+                <div class="stat-item">
+                    <div class="stat-value">
+                        <?php echo number_format($success_rate, 1); ?>%
+                    </div>
+                    <div class="stat-label">Success Rate</div>
                 </div>
             </div>
         </div>
@@ -378,7 +385,7 @@ $export_data = [
     <!-- Charts -->
     <div class="charts-grid">
         <div class="chart-container">
-            <h3 class="section-title">Hourly Transaction Trends</h3>
+            <h3 class="section-title">Successful vs Failed OUT Transactions by Hour</h3>
             <canvas id="malpayHourlyChart" height="300"></canvas>
         </div>
         
@@ -431,7 +438,7 @@ $export_data = [
         </div>
     </div>
     
-    <!-- Clean Gap -->
+     <!-- Clean Gap -->
     <div style="margin-top: 30px;"></div>
 
     <!-- Recent Failed Transactions -->
@@ -487,127 +494,127 @@ $export_data = [
 </div>
 
 <!-- Hidden div for export data -->
-<div id="exportDataMalpay" style="display: none;" data-export='<?php echo json_encode($export_data); ?>'></div>
+<div id="exportData" style="display: none;" data-export='<?php echo json_encode($export_data); ?>'></div>
 
 <script>
-// Filter functionality - REMOVED (now handled by script.js)
-// All filter functionality is now managed by the centralized script.js
-
-// Prepare hourly data for chart
-const hourlyLabels = <?php echo json_encode(array_column($hourly_data, 'hour')); ?>;
-const successfulHourlyData = <?php echo json_encode(array_column($hourly_data, 'out_count')); ?>;
-const failedHourlyData = <?php echo json_encode(array_column($hourly_failed_data, 'failed_count')); ?>;
-
-// MALPAY Charts
+// MALPAY Filter functionality
 document.addEventListener('DOMContentLoaded', function() {
-    // Only initialize charts if this tab is active
-    if (document.getElementById('malpay').classList.contains('active')) {
-        initializeMalpayCharts();
-    }
-});
+    // Apply filter button for MALPAY
+    document.getElementById('applyFilterMalpay').addEventListener('click', function() {
+        const date = document.getElementById('malpayFilterDate').value;
+        const dateEnd = document.getElementById('malpayFilterDateEnd').value;
+        const merchant = document.getElementById('malpayFilterMerchant').value;
+        
+        const params = new URLSearchParams({
+            date: date,
+            date_end: dateEnd,
+            merchant: merchant
+        });
+        
+        window.location.href = '?' + params.toString();
+    });
 
-function initializeMalpayCharts() {
-    const hourlyCtx = document.getElementById('malpayHourlyChart');
-    if (hourlyCtx) {
-        new Chart(hourlyCtx.getContext('2d'), {
-            type: 'bar',
-            data: {
-                labels: hourlyLabels,
-                datasets: [
-                    {
-                        label: 'Successful OUT',
-                        data: successfulHourlyData,
-                        backgroundColor: '#27ae60',
-                        borderColor: '#27ae60',
-                        borderWidth: 1
-                    },
-                    {
-                        label: 'Failed OUT',
-                        data: failedHourlyData,
-                        backgroundColor: '#e74c3c',
-                        borderColor: '#e74c3c',
-                        borderWidth: 1
-                    }
-                ]
-            },
-            options: {
-                responsive: true,
-                plugins: {
-                    title: { display: true, text: 'Successful vs Failed OUT Transactions by Hour' }
+    // Enter key support for MALPAY filters
+    [document.getElementById('malpayFilterDate'), document.getElementById('malpayFilterDateEnd'), document.getElementById('malpayFilterMerchant')]
+        .forEach(element => {
+            element.addEventListener('keypress', function(e) {
+                if (e.key === 'Enter') {
+                    document.getElementById('applyFilterMalpay').click();
+                }
+            });
+        });
+
+    // Export functionality
+    document.getElementById('printReport').addEventListener('click', function() {
+        window.print();
+    });
+
+    document.getElementById('exportCSV').addEventListener('click', function() {
+        const exportData = JSON.parse(document.getElementById('exportData').dataset.export);
+        exportToCSV(exportData, 'malpay');
+    });
+
+    // Prepare hourly data for chart
+    const hourlyLabels = <?php echo json_encode(array_column($hourly_data, 'hour')); ?>;
+    const successfulHourlyData = <?php echo json_encode(array_column($hourly_data, 'out_count')); ?>;
+    const failedHourlyData = <?php echo json_encode(array_column($hourly_failed_data, 'failed_count')); ?>;
+
+    // MALPAY Charts
+    const hourlyCtx = document.getElementById('malpayHourlyChart').getContext('2d');
+    new Chart(hourlyCtx, {
+        type: 'bar',
+        data: {
+            labels: hourlyLabels,
+            datasets: [
+                {
+                    label: 'Successful OUT',
+                    data: successfulHourlyData,
+                    backgroundColor: '#27ae60',
+                    borderColor: '#27ae60',
+                    borderWidth: 1
                 },
-                scales: {
-                    x: {
-                        title: { display: true, text: 'Hour of Day' }
-                    },
-                    y: {
-                        title: { display: true, text: 'Number of Transactions' },
-                        beginAtZero: true
-                    }
+                {
+                    label: 'Failed OUT',
+                    data: failedHourlyData,
+                    backgroundColor: '#e74c3c',
+                    borderColor: '#e74c3c',
+                    borderWidth: 1
+                }
+            ]
+        },
+        options: {
+            responsive: true,
+            plugins: {
+                title: { display: true, text: 'Successful vs Failed OUT Transactions by Hour' }
+            },
+            scales: {
+                x: {
+                    title: { display: true, text: 'Hour of Day' }
+                },
+                y: {
+                    title: { display: true, text: 'Number of Transactions' },
+                    beginAtZero: true
                 }
             }
-        });
-    }
+        }
+    });
 
     // Merchant Amount Chart
-    const merchantCtx = document.getElementById('malpayMerchantChart');
-    if (merchantCtx) {
-        new Chart(merchantCtx.getContext('2d'), {
-            type: 'bar',
-            data: {
-                labels: <?php echo json_encode(array_column($merchant_stats_data, 'MerchantName')); ?>,
-                datasets: [{
-                    label: 'Transaction Amount (MK)',
-                    data: <?php echo json_encode(array_column($merchant_stats_data, 'total_amount')); ?>,
-                    backgroundColor: '#3498db',
-                    borderColor: '#2980b9',
-                    borderWidth: 1
-                }]
+    const merchantCtx = document.getElementById('malpayMerchantChart').getContext('2d');
+    new Chart(merchantCtx, {
+        type: 'bar',
+        data: {
+            labels: <?php echo json_encode(array_column($merchant_stats_data, 'MerchantName')); ?>,
+            datasets: [{
+                label: 'Transaction Amount (MK)',
+                data: <?php echo json_encode(array_column($merchant_stats_data, 'total_amount')); ?>,
+                backgroundColor: '#3498db',
+                borderColor: '#2980b9',
+                borderWidth: 1
+            }]
+        },
+        options: {
+            responsive: true,
+            plugins: {
+                legend: { position: 'top' },
+                title: { display: true, text: 'Transaction Amount by Merchant' }
             },
-            options: {
-                responsive: true,
-                plugins: {
-                    legend: { position: 'top' },
-                    title: { display: true, text: 'Transaction Amount by Merchant' }
+            scales: {
+                x: {
+                    title: { display: true, text: 'Merchant' }
                 },
-                scales: {
-                    x: {
-                        title: { display: true, text: 'Merchant' }
-                    },
-                    y: {
-                        title: { display: true, text: 'Amount (MK)' },
-                        beginAtZero: true
-                    }
+                y: {
+                    title: { display: true, text: 'Amount (MK)' },
+                    beginAtZero: true
                 }
             }
-        });
-    }
-}
-
-// Export functionality
-document.addEventListener('DOMContentLoaded', function() {
-    const printBtn = document.getElementById('printReportMalpay');
-    const csvBtn = document.getElementById('exportCSVMalpay');
-    
-    if (printBtn) {
-        printBtn.addEventListener('click', function() {
-            window.print();
-        });
-    }
-    
-    if (csvBtn) {
-        csvBtn.addEventListener('click', function() {
-            const exportData = JSON.parse(document.getElementById('exportDataMalpay').dataset.export);
-            exportToCSV(exportData, 'malpay');
-        });
-    }
+        }
+    });
 });
 
 // PDF Export function
 function exportToPDF(dashboardType) {
-    const exportDataElement = document.getElementById('exportDataMalpay');
-    if (!exportDataElement) return;
-    
-    const exportData = JSON.parse(exportDataElement.dataset.export);
+    const exportData = JSON.parse(document.getElementById('exportData').dataset.export);
     
     // Create a form and submit it to the PDF generation endpoint
     const form = document.createElement('form');
@@ -718,50 +725,4 @@ function applyPrintStyles() {
 }
 
 applyPrintStyles();
-
-// Manual alert resend function
-function resendAlert(dashboardType) {
-    if (confirm('This will send a manual alert email to IT and Service Desk. Continue?')) {
-        // Show loading state
-        const button = event.target;
-        const originalText = button.textContent;
-        button.textContent = 'Sending...';
-        button.disabled = true;
-        
-        // Send AJAX request
-        fetch('trigger_alert.php', {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/x-www-form-urlencoded',
-            },
-            body: 'dashboard=' + dashboardType
-        })
-        .then(response => response.json())
-        .then(data => {
-            if (data.success) {
-                alert('✅ ' + data.message + '\n\nThis was a manual alert trigger.');
-                // Update the alert message
-                const alertText = button.closest('.alert-banner').querySelector('p');
-                alertText.innerHTML = alertText.innerHTML.replace('Alert was already sent', 'Manual alert sent') + '<br><strong>Manual alert sent at: ' + new Date().toLocaleString() + '</strong>';
-            } else {
-                alert('❌ ' + data.message);
-            }
-        })
-        .catch(error => {
-            alert('❌ Error sending alert: ' + error.message);
-        })
-        .finally(() => {
-            // Reset button
-            button.textContent = 'Resend Alert Manually';
-            button.disabled = false;
-        });
-    }
-}
-
-// Reinitialize charts when tab becomes active
-document.addEventListener('tabChanged', function(e) {
-    if (e.detail.tabName === 'malpay') {
-        setTimeout(initializeMalpayCharts, 100);
-    }
-});
 </script>
